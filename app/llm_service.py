@@ -9,7 +9,9 @@ OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_MODEL = "qwen3:8b"
 DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful assistant inside a communication prototype. "
-    "Answer clearly and concisely."
+    "You will receive recent chat history for the current session plus the user's "
+    "latest drafting request. Use the session history as context, and answer "
+    "clearly and concisely."
 )
 
 
@@ -41,18 +43,23 @@ class OllamaService:
         self,
         *,
         message_text: str,
+        conversation_history: str = "",
         model: str | None = None,
         system_prompt: str | None = None,
     ) -> LLMResponse:
         selected_model = model or self.default_model
         prompt = system_prompt or self.system_prompt
+        user_message = self._build_user_message(
+            conversation_history=conversation_history,
+            message_text=message_text,
+        )
 
         payload = {
             "model": selected_model,
             "stream": False,
             "messages": [
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": message_text},
+                {"role": "user", "content": user_message},
             ],
         }
 
@@ -74,3 +81,14 @@ class OllamaService:
             raise OllamaServiceError("Ollama returned an empty response.")
 
         return LLMResponse(model=selected_model, output_text=output_text)
+
+    def _build_user_message(self, *, conversation_history: str, message_text: str) -> str:
+        if not conversation_history:
+            return f"User request:\n{message_text}"
+
+        return (
+            "Recent session conversation:\n"
+            f"{conversation_history}\n\n"
+            "User request:\n"
+            f"{message_text}"
+        )

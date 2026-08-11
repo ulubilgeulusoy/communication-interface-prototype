@@ -105,6 +105,21 @@ def list_messages(session_id: str | None = None) -> list[dict[str, Any]]:
         return [dict(row) for row in rows]
 
 
+def list_recent_messages(session_id: str, limit: int = 12) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM messages
+            WHERE session_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (session_id, limit),
+        ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+
 def log_llm_interaction(
     *,
     timestamp: str,

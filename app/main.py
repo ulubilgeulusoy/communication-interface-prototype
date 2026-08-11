@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from .db import (
     init_db,
     list_messages,
+    list_recent_messages,
     log_llm_interaction,
     log_message,
     mark_delivered,
@@ -26,6 +27,7 @@ STATIC_DIR = BASE_DIR / "frontend"
 app = FastAPI(title="Two-User Communication Prototype")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 ollama_service = OllamaService()
+LLM_HISTORY_LIMIT = 12
 
 
 class LLMRequest(BaseModel):
@@ -41,6 +43,23 @@ class LLMReply(BaseModel):
     model: str
     output_text: str
     timestamp: str
+
+
+def build_conversation_history(session_id: str, limit: int = LLM_HISTORY_LIMIT) -> str:
+    recent_messages = list_recent_messages(session_id, limit=limit)
+    if not recent_messages:
+        return ""
+
+    lines: list[str] = []
+    for message in recent_messages:
+        sender = message["sender"]
+        receiver = message["receiver"]
+        content = str(message["content"]).strip()
+        if not content:
+            continue
+        lines.append(f"{sender} to {receiver}: {content}")
+
+    return "\n".join(lines)
 
 
 class ConnectionManager:
@@ -92,10 +111,12 @@ def get_messages(session_id: str | None = Query(default=None)) -> list[dict]:
 @app.post("/api/llm/message", response_model=LLMReply)
 async def ask_llm(payload: LLMRequest) -> LLMReply:
     timestamp = utc_now_iso()
+    conversation_history = build_conversation_history(payload.session_id)
 
     try:
         reply = await ollama_service.generate_reply(
             message_text=payload.message_text,
+            conversation_history=conversation_history,
             model=payload.model,
         )
     except OllamaServiceError as exc:
