@@ -56,6 +56,116 @@ http://127.0.0.1:8000
 
 In one window, connect as `User A`. In the other, connect as `User B`. Use the same session ID in both windows.
 
+## Application Startup Checklist
+
+1. Go to the project folder:
+
+```powershell
+cd /home/parc/communication-interface-prototype
+```
+
+2. Check whether Ollama is already running:
+
+```powershell
+curl http://127.0.0.1:11434/api/tags
+```
+
+If you get JSON back, Ollama is up.
+
+3. Check whether `qwen3:8b` is available:
+
+```powershell
+ollama list
+```
+
+4. If Ollama is not running yet, start it:
+
+```powershell
+ollama serve
+```
+
+5. Activate the virtual environment:
+
+```powershell
+source .comm_interface_env/bin/activate
+```
+
+6. Confirm the virtual environment is active:
+
+```powershell
+which python
+```
+
+7. If needed, verify the required Python packages are installed:
+
+```powershell
+pip show fastapi httpx uvicorn
+```
+
+If any are missing, install them with:
+
+```powershell
+pip install -r requirements.txt
+```
+
+8. Start the FastAPI app:
+
+```powershell
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+9. Check that the app is responding locally:
+
+```powershell
+curl http://127.0.0.1:8000/api/messages
+```
+
+10. Check that Tailscale is connected if you want to share the app:
+
+```powershell
+tailscale status
+```
+
+11. Serve the app over Tailscale:
+
+```powershell
+tailscale serve 8000
+```
+
+12. Confirm what Tailscale is serving:
+
+```powershell
+tailscale serve status
+```
+
+13. Open the app:
+
+```text
+http://127.0.0.1:8000
+```
+
+Or open the HTTPS tailnet URL printed by `tailscale serve`.
+
+14. Test normal chat:
+
+Open two browser windows, connect one as `user_a` and the other as `user_b`, and send a message.
+
+15. Test the LLM path:
+
+Type a prompt in the message box and click `Ask LLM`.
+
+16. If you want to confirm the app is listening on port `8000`:
+
+```powershell
+ss -ltnp | grep 8000
+```
+
+17. If you want to confirm Ollama is listening on port `11434`:
+
+```powershell
+ss -ltnp | grep 11434
+```
+
 ## Ask The Local LLM
 
 The normal WebSocket chat between `user_a` and `user_b` is unchanged. To query the local model instead, type into the same message box and click `Ask LLM`.
