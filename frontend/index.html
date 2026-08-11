@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Communication Prototype</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="panel">
+        <h1>Communication Prototype</h1>
+
+        <form id="settings-form" class="settings">
+          <label>
+            Your user
+            <select id="user-id">
+              <option value="user_a">User A</option>
+              <option value="user_b">User B</option>
+            </select>
+          </label>
+
+          <label>
+            Session ID
+            <input id="session-id" value="session-001" autocomplete="off" />
+          </label>
+
+          <button type="submit">Connect</button>
+        </form>
+
+        <div class="status-row">
+          <span id="connection-status">Disconnected</span>
+          <span id="condition-label">Condition: unknown</span>
+        </div>
+      </section>
+
+      <section class="panel chat-panel">
+        <div id="messages" class="messages" aria-live="polite"></div>
+
+        <form id="message-form" class="composer">
+          <label>
+            Send to
+            <select id="receiver-id">
+              <option value="user_b">User B</option>
+              <option value="user_a">User A</option>
+            </select>
+          </label>
+          <input id="message-content" placeholder="Type a message" autocomplete="off" />
+          <button type="submit">Send</button>
+        </form>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
