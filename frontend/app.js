@@ -7,6 +7,8 @@ const contentInput = document.querySelector("#message-content");
 const statusLabel = document.querySelector("#connection-status");
 const conditionLabel = document.querySelector("#condition-label");
 const messagesEl = document.querySelector("#messages");
+const askLlmButton = document.querySelector("#ask-llm-button");
+const llmStatusEl = document.querySelector("#llm-status");
 
 let socket = null;
 let currentCondition = null;
@@ -31,6 +33,30 @@ function appendMessage(message, direction) {
   row.append(meta, body, delivery);
   messagesEl.append(row);
   messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function appendLlmMessage(message) {
+  const row = document.createElement("article");
+  row.className = "message llm";
+
+  const meta = document.createElement("div");
+  meta.className = "message-meta";
+  meta.textContent = `LLM (${message.model}) for ${message.user_id} | ${message.timestamp}`;
+
+  const body = document.createElement("p");
+  body.textContent = message.output_text;
+
+  const note = document.createElement("div");
+  note.className = "delivery";
+  note.textContent = `Prompted from session ${message.session_id}`;
+
+  row.append(meta, body, note);
+  messagesEl.append(row);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function setLlmStatus(text) {
+  llmStatusEl.textContent = text;
 }
 
 async function loadCondition(sessionId) {
@@ -97,6 +123,46 @@ messageForm.addEventListener("submit", (event) => {
     }),
   );
   contentInput.value = "";
+});
+
+askLlmButton.addEventListener("click", async () => {
+  const messageText = contentInput.value.trim();
+  const sessionId = sessionInput.value.trim();
+  const userId = userInput.value;
+
+  if (!messageText || !sessionId || !userId) {
+    setLlmStatus("Enter a session ID and a prompt first");
+    return;
+  }
+
+  askLlmButton.disabled = true;
+  setLlmStatus("Asking local Ollama...");
+
+  try {
+    const response = await fetch("/api/llm/message", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        user_id: userId,
+        message_text: messageText,
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "LLM request failed");
+    }
+
+    appendLlmMessage(data);
+    setLlmStatus(`LLM replied using ${data.model}`);
+  } catch (error) {
+    setLlmStatus(error.message || "Unable to reach local Ollama");
+  } finally {
+    askLlmButton.disabled = false;
+  }
 });
 
 userInput.addEventListener("change", () => {

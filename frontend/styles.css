@@ -28,6 +28,10 @@ button {
   padding: 0.7rem 1rem;
 }
 
+.secondary-button {
+  background: #1f4b99;
+}
+
 input,
 select {
   border: 1px solid #bac7d1;
@@ -110,6 +114,12 @@ h1 {
   margin-left: auto;
 }
 
+.message.llm {
+  background: #fff4d6;
+  border: 1px solid #ecd28a;
+  max-width: 100%;
+}
+
 .message p {
   margin: 0.35rem 0;
 }
@@ -121,7 +131,13 @@ h1 {
 }
 
 .composer {
-  grid-template-columns: 150px 1fr auto;
+  grid-template-columns: 150px 1fr auto auto;
+}
+
+.llm-status {
+  color: #52606d;
+  font-size: 0.9rem;
+  min-height: 1.25rem;
 }
 
 @media (max-width: 700px) {

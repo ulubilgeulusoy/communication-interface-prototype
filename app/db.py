@@ -31,6 +31,19 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS llm_interactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                model TEXT NOT NULL,
+                input_text TEXT NOT NULL,
+                output_text TEXT NOT NULL
+            )
+            """
+        )
 
 
 def utc_now_iso() -> str:
@@ -90,3 +103,30 @@ def list_messages(session_id: str | None = None) -> list[dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
+
+
+def log_llm_interaction(
+    *,
+    timestamp: str,
+    session_id: str,
+    user_id: str,
+    model: str,
+    input_text: str,
+    output_text: str,
+) -> int:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO llm_interactions (
+                timestamp,
+                session_id,
+                user_id,
+                model,
+                input_text,
+                output_text
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (timestamp, session_id, user_id, model, input_text, output_text),
+        )
+        return int(cursor.lastrowid)

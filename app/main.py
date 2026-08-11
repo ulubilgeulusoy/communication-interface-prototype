@@ -3,12 +3,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
-from .db import init_db, list_messages, log_message, mark_delivered, utc_now_iso
+from .db import (
+    init_db,
+    list_messages,
+    log_llm_interaction,
+    log_message,
+    mark_delivered,
+    utc_now_iso,
+)
 from .experiment import assign_condition
+from .llm_service import DEFAULT_MODEL, OllamaService, OllamaServiceError
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -16,6 +25,22 @@ STATIC_DIR = BASE_DIR / "frontend"
 
 app = FastAPI(title="Two-User Communication Prototype")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+ollama_service = OllamaService()
+
+
+class LLMRequest(BaseModel):
+    session_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    message_text: str = Field(min_length=1)
+    model: str | None = None
+
+
+class LLMReply(BaseModel):
+    session_id: str
+    user_id: str
+    model: str
+    output_text: str
+    timestamp: str
 
 
 class ConnectionManager:
@@ -62,6 +87,36 @@ def get_condition(session_id: str) -> dict[str, str]:
 @app.get("/api/messages")
 def get_messages(session_id: str | None = Query(default=None)) -> list[dict]:
     return list_messages(session_id)
+
+
+@app.post("/api/llm/message", response_model=LLMReply)
+async def ask_llm(payload: LLMRequest) -> LLMReply:
+    timestamp = utc_now_iso()
+
+    try:
+        reply = await ollama_service.generate_reply(
+            message_text=payload.message_text,
+            model=payload.model,
+        )
+    except OllamaServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    log_llm_interaction(
+        timestamp=timestamp,
+        session_id=payload.session_id,
+        user_id=payload.user_id,
+        model=reply.model or payload.model or DEFAULT_MODEL,
+        input_text=payload.message_text,
+        output_text=reply.output_text,
+    )
+
+    return LLMReply(
+        session_id=payload.session_id,
+        user_id=payload.user_id,
+        model=reply.model,
+        output_text=reply.output_text,
+        timestamp=timestamp,
+    )
 
 
 @app.websocket("/ws/{user_id}")
