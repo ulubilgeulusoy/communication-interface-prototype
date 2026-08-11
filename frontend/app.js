@@ -7,11 +7,15 @@ const contentInput = document.querySelector("#message-content");
 const statusLabel = document.querySelector("#connection-status");
 const conditionLabel = document.querySelector("#condition-label");
 const messagesEl = document.querySelector("#messages");
+const llmPromptInput = document.querySelector("#llm-prompt");
+const llmResponseInput = document.querySelector("#llm-response");
 const askLlmButton = document.querySelector("#ask-llm-button");
+const sendLlmButton = document.querySelector("#send-llm-button");
 const llmStatusEl = document.querySelector("#llm-status");
 
 let socket = null;
 let currentCondition = null;
+let lastLlmResponse = "";
 
 function appendMessage(message, direction) {
   const row = document.createElement("article");
@@ -59,6 +63,35 @@ function setLlmStatus(text) {
   llmStatusEl.textContent = text;
 }
 
+function setLastLlmResponse(text) {
+  lastLlmResponse = text;
+  llmResponseInput.value = text;
+  sendLlmButton.disabled = !text;
+}
+
+function sendMessageToUser(content) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    statusLabel.textContent = "Connect before sending";
+    return false;
+  }
+
+  const sessionId = sessionInput.value.trim();
+  if (!content || !sessionId) {
+    return false;
+  }
+
+  socket.send(
+    JSON.stringify({
+      receiver: receiverInput.value,
+      content,
+      session_id: sessionId,
+      experimental_condition: currentCondition,
+    }),
+  );
+
+  return true;
+}
+
 async function loadCondition(sessionId) {
   const response = await fetch(`/api/condition/${encodeURIComponent(sessionId)}`);
   const data = await response.json();
@@ -103,30 +136,18 @@ settingsForm.addEventListener("submit", async (event) => {
 messageForm.addEventListener("submit", (event) => {
   event.preventDefault();
 
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    statusLabel.textContent = "Connect before sending";
-    return;
-  }
-
   const content = contentInput.value.trim();
-  const sessionId = sessionInput.value.trim();
-  if (!content || !sessionId) {
+  if (!content) {
     return;
   }
 
-  socket.send(
-    JSON.stringify({
-      receiver: receiverInput.value,
-      content,
-      session_id: sessionId,
-      experimental_condition: currentCondition,
-    }),
-  );
-  contentInput.value = "";
+  if (sendMessageToUser(content)) {
+    contentInput.value = "";
+  }
 });
 
 askLlmButton.addEventListener("click", async () => {
-  const messageText = contentInput.value.trim();
+  const messageText = llmPromptInput.value.trim();
   const sessionId = sessionInput.value.trim();
   const userId = userInput.value;
 
@@ -157,11 +178,24 @@ askLlmButton.addEventListener("click", async () => {
     }
 
     appendLlmMessage(data);
+    setLastLlmResponse(data.output_text);
     setLlmStatus(`LLM replied using ${data.model}`);
   } catch (error) {
+    setLastLlmResponse("");
     setLlmStatus(error.message || "Unable to reach local Ollama");
   } finally {
     askLlmButton.disabled = false;
+  }
+});
+
+sendLlmButton.addEventListener("click", () => {
+  if (!lastLlmResponse) {
+    setLlmStatus("Ask the LLM for a draft first");
+    return;
+  }
+
+  if (sendMessageToUser(lastLlmResponse)) {
+    setLlmStatus(`Sent latest LLM message to ${receiverInput.value}`);
   }
 });
 

@@ -51,7 +51,7 @@ label {
   display: grid;
   gap: 1rem;
   margin: 0 auto;
-  max-width: 920px;
+  max-width: 1240px;
   min-height: 100vh;
   padding: 1rem;
 }
@@ -88,6 +88,12 @@ h1 {
   display: grid;
   gap: 1rem;
   grid-template-rows: minmax(320px, 1fr) auto;
+}
+
+.chat-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
 }
 
 .messages {
@@ -131,7 +137,7 @@ h1 {
 }
 
 .composer {
-  grid-template-columns: 150px 1fr auto auto;
+  grid-template-columns: 150px 1fr auto;
 }
 
 .llm-status {
@@ -140,7 +146,45 @@ h1 {
   min-height: 1.25rem;
 }
 
+.llm-panel {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.llm-panel-header h2 {
+  font-size: 1.05rem;
+  margin: 0 0 0.35rem;
+}
+
+.llm-panel-header p {
+  color: #52606d;
+  font-size: 0.92rem;
+  margin: 0;
+}
+
+.llm-textarea {
+  border: 1px solid #bac7d1;
+  border-radius: 6px;
+  font: inherit;
+  min-height: 120px;
+  padding: 0.75rem;
+  resize: vertical;
+  width: 100%;
+}
+
+.llm-response {
+  min-height: 200px;
+}
+
+.llm-actions {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: 1fr;
+}
+
 @media (max-width: 700px) {
+  .chat-layout,
   .settings,
   .composer {
     grid-template-columns: 1fr;

@@ -34,23 +34,55 @@
         </div>
       </section>
 
-      <section class="panel chat-panel">
-        <div id="messages" class="messages" aria-live="polite"></div>
+      <section class="chat-layout">
+        <section class="panel chat-panel">
+          <div id="messages" class="messages" aria-live="polite"></div>
 
-        <form id="message-form" class="composer">
+          <form id="message-form" class="composer">
+            <label>
+              Send to
+              <select id="receiver-id">
+                <option value="user_b">User B</option>
+                <option value="user_a">User A</option>
+              </select>
+            </label>
+            <input id="message-content" placeholder="Type a message" autocomplete="off" />
+            <button type="submit">Send</button>
+          </form>
+        </section>
+
+        <aside class="panel llm-panel">
+          <div class="llm-panel-header">
+            <h2>LLM Drafting</h2>
+            <p>Ask the local model for a suggested reply, then choose whether to forward it.</p>
+          </div>
+
           <label>
-            Send to
-            <select id="receiver-id">
-              <option value="user_b">User B</option>
-              <option value="user_a">User A</option>
-            </select>
+            Prompt for LLM
+            <textarea
+              id="llm-prompt"
+              class="llm-textarea"
+              placeholder="Ask the local model for a suggested message"
+            ></textarea>
           </label>
-          <input id="message-content" placeholder="Type a message" autocomplete="off" />
-          <button type="submit">Send</button>
-          <button type="button" id="ask-llm-button" class="secondary-button">Ask LLM</button>
-        </form>
 
-        <div id="llm-status" class="llm-status" aria-live="polite"></div>
+          <div class="llm-actions">
+            <button type="button" id="ask-llm-button" class="secondary-button">Ask LLM</button>
+            <button type="button" id="send-llm-button" disabled>Send Last Message to User</button>
+          </div>
+
+          <label>
+            Latest LLM response
+            <textarea
+              id="llm-response"
+              class="llm-textarea llm-response"
+              readonly
+              placeholder="The latest LLM response will appear here"
+            ></textarea>
+          </label>
+
+          <div id="llm-status" class="llm-status" aria-live="polite"></div>
+        </aside>
       </section>
     </main>
 
