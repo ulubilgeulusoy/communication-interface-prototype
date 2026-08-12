@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import httpx
 
 
-OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "gpt-oss:20b"
 DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful assistant inside a communication prototype. "

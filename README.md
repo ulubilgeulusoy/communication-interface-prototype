@@ -10,7 +10,7 @@ Minimal two-user communication web app for prototyping real-time interaction ove
 - User chat and LLM chat are shown in separate side-by-side panes.
 - Messages can be multi-selected and forwarded between the user chat and LLM chat.
 - Message timing includes sent, delivered, and client-side received status in the UI.
-- A separate backend LLM service can query local Ollama at `http://localhost:11434`.
+- A separate backend LLM service can query local Ollama at `http://127.0.0.1:11434`.
 - LLM interactions are logged alongside each session with timestamp, user, model, prompt, and response.
 - Frontend, backend, and experimental condition assignment are kept in separate modules.
 
@@ -199,7 +199,7 @@ Each session ID maps to its own SQLite file under `sessions/`. If you reconnect 
 
 The normal WebSocket chat between `user_a` and `user_b` is unchanged. To query the local model instead, type into the `LLM Chat` pane and click `Send to LLM`.
 
-- Backend target: `http://localhost:11434`
+- Backend target: `http://127.0.0.1:11434`
 - Default model: `gpt-oss:20b`
 - Endpoint: `POST /api/llm/message`
 

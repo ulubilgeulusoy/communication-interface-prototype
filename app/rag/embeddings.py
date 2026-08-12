@@ -12,7 +12,7 @@ import httpx
 
 
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
-DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 
 class EmbeddingServiceError(Exception):
