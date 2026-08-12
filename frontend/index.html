@@ -8,8 +8,10 @@
   </head>
   <body>
     <main class="app-shell">
-      <section class="panel">
-        <h1>Communication Prototype</h1>
+      <section class="panel hero-panel">
+        <div class="hero-copy">
+          <p class="eyebrow">Communication Workspace</p>
+        </div>
 
         <form id="settings-form" class="settings">
           <label>
@@ -34,57 +36,76 @@
         </div>
       </section>
 
-      <section class="chat-layout">
-        <section class="panel chat-panel">
-          <div id="messages" class="messages" aria-live="polite"></div>
+      <section class="workspace-layout">
+        <section class="panel thread-panel" data-thread="user">
+          <div class="thread-header">
+            <div>
+              <h2>User Chat</h2>
+            </div>
+            <p class="thread-note">
+              Click to select. Right-click a message or selection to send it to the other window.
+            </p>
+          </div>
+
+          <div id="user-messages" class="messages" aria-live="polite"></div>
+
+          <div class="selection-bar">
+            <span id="user-selection-status">No user messages selected</span>
+          </div>
 
           <form id="message-form" class="composer">
-            <label>
+            <label class="compact-label">
               Send to
               <select id="receiver-id">
                 <option value="user_b">User B</option>
                 <option value="user_a">User A</option>
               </select>
             </label>
-            <input id="message-content" placeholder="Type a message" autocomplete="off" />
-            <button type="submit">Send</button>
+            <textarea
+              id="message-content"
+              class="composer-textarea"
+              placeholder="Type a message for the other user"
+            ></textarea>
+            <button type="submit">Send to User</button>
           </form>
         </section>
 
-        <aside class="panel llm-panel">
-          <div class="llm-panel-header">
-            <h2>LLM Drafting</h2>
-            <p>Ask the local model for a suggested reply, then choose whether to forward it.</p>
+        <section class="panel thread-panel" data-thread="llm">
+          <div class="thread-header">
+            <div>
+              <h2>LLM Chat</h2>
+            </div>
+            <p class="thread-note">The local model stays in its own thread and can receive forwarded messages.</p>
           </div>
 
-          <label>
-            Prompt for LLM
-            <textarea
-              id="llm-prompt"
-              class="llm-textarea"
-              placeholder="Ask the local model for a suggested message"
-            ></textarea>
-          </label>
+          <div id="llm-messages" class="messages" aria-live="polite"></div>
 
-          <div class="llm-actions">
-            <button type="button" id="ask-llm-button" class="secondary-button">Ask LLM</button>
-            <button type="button" id="send-llm-button" disabled>Send Last Message to User</button>
+          <div class="selection-bar">
+            <span id="llm-selection-status">No LLM messages selected</span>
+            <span id="llm-status" class="llm-status"></span>
           </div>
 
-          <label>
-            Latest LLM response
+          <form id="llm-form" class="composer">
+            <div class="composer-label-stack">
+              <span class="compact-label-title">Model</span>
+              <span class="composer-model">Local Ollama</span>
+            </div>
             <textarea
-              id="llm-response"
-              class="llm-textarea llm-response"
-              readonly
-              placeholder="The latest LLM response will appear here"
+              id="llm-content"
+              class="composer-textarea"
+              placeholder="Type a message for the LLM"
             ></textarea>
-          </label>
-
-          <div id="llm-status" class="llm-status" aria-live="polite"></div>
-        </aside>
+            <button type="submit" id="ask-llm-button" class="secondary-button">Send to LLM</button>
+          </form>
+        </section>
       </section>
     </main>
+
+    <div id="message-menu" class="context-menu" hidden>
+      <button type="button" data-action="send-user">Send to User Chat</button>
+      <button type="button" data-action="send-llm">Send to LLM Chat</button>
+      <button type="button" data-action="clear-selection">Clear Selection</button>
+    </div>
 
     <script src="/static/app.js"></script>
   </body>
