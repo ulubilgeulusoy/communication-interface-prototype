@@ -38,7 +38,7 @@ pip install -r requirements.txt
 Install and run Ollama locally, then pull the default model:
 
 ```powershell
-ollama pull qwen3:14b
+ollama pull gpt-oss:20b
 ollama serve
 ```
 
@@ -51,29 +51,55 @@ ss -ltnp | grep 11434
 
 `ollama ps` can still be empty in this state. That command only shows models currently loaded for inference, not whether the Ollama server itself is running.
 
-## Run
+## Run In Visual Studio Code
 
-```powershell
-uvicorn app.main:app --reload
-```
+Use this checklist if you are starting the app from the VS Code terminal. It assumes the virtual environment and dependencies are already set up.
 
-Open two browser windows at:
+1. Open this folder in VS Code:
 
 ```text
-http://127.0.0.1:8000
+/home/parc/communication-interface-prototype
 ```
 
-In one window, connect as `User A`. In the other, connect as `User B`. Use the same session ID in both windows.
-
-## Application Startup Checklist
-
-1. Go to the project folder:
+2. Open a new terminal in VS Code and make sure you are in the repo root:
 
 ```powershell
-cd /home/parc/communication-interface-prototype
+pwd
 ```
 
-2. Check whether Ollama is already running:
+In Ubuntu or another Linux shell, this usually prints:
+
+```text
+/home/parc/communication-interface-prototype
+```
+
+In PowerShell, you can also run:
+
+```powershell
+Get-Location
+```
+
+3. Make sure the virtual environment is already loaded.
+
+```powershell
+which python
+```
+
+In Ubuntu or another Linux shell, a loaded venv usually looks like:
+
+```text
+/home/parc/communication-interface-prototype/.comm_interface_env/bin/python
+```
+
+In PowerShell, use:
+
+```powershell
+Get-Command python
+```
+
+That usually shows a Python path inside the project virtual environment.
+
+4. Check whether Ollama is already running:
 
 ```powershell
 curl http://127.0.0.1:11434/api/tags
@@ -81,13 +107,15 @@ curl http://127.0.0.1:11434/api/tags
 
 If you get JSON back, Ollama is up.
 
-3. Check whether `qwen3:14b` is available:
+5. Check whether `gpt-oss:20b` is available:
 
 ```powershell
 ollama list
 ```
 
-4. If `curl` in step 2 fails, start Ollama:
+You should see `gpt-oss:20b` in the model list.
+
+6. If `curl` in step 4 fails, start Ollama in a separate VS Code terminal:
 
 ```powershell
 ollama serve
@@ -95,83 +123,44 @@ ollama serve
 
 If `ollama serve` returns `bind: address already in use`, treat that as "Ollama is already running" and move on to the next step.
 
-5. Activate the virtual environment:
-
-```powershell
-source .comm_interface_env/bin/activate
-```
-
-6. Confirm the virtual environment is active:
-
-```powershell
-which python
-```
-
-7. If needed, verify the required Python packages are installed:
-
-```powershell
-pip show fastapi httpx uvicorn
-```
-
-If any are missing, install them with:
-
-```powershell
-pip install -r requirements.txt
-```
-
-8. Start the FastAPI app:
+7. Start the FastAPI app from the repo root:
 
 ```powershell
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-9. Check that the app is responding locally:
+In either PowerShell or Ubuntu/Linux terminal, a healthy startup usually includes lines like:
+
+```text
+Uvicorn running on http://127.0.0.1:8000
+Application startup complete.
+```
+
+8. Check that the app is responding locally:
 
 ```powershell
 curl http://127.0.0.1:8000/api/messages
 ```
 
-10. Check that Tailscale is connected if you want to share the app:
-
-```powershell
-tailscale status
-```
-
-11. Serve the app over Tailscale:
-
-```powershell
-tailscale serve 8000
-```
-
-12. Confirm what Tailscale is serving:
-
-```powershell
-tailscale serve status
-```
-
-13. Open the app:
+9. Open the app in your browser:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Or open the HTTPS tailnet URL printed by `tailscale serve`.
+10. Open two browser windows, connect one as `user_a` and the other as `user_b`, and use the same session ID in both windows.
 
-14. Test normal chat:
+11. Test normal chat by sending a message between the two users.
 
-Open two browser windows, connect one as `user_a` and the other as `user_b`, and send a message.
+12. Test the LLM path by entering a prompt and clicking `Ask LLM`.
 
-15. Test the LLM path:
-
-Type a prompt in the message box and click `Ask LLM`.
-
-16. If you want to confirm the app is listening on port `8000`:
+13. If you want to confirm the app is listening on port `8000`:
 
 ```powershell
 ss -ltnp | grep 8000
 ```
 
-17. If you want to confirm Ollama is listening on port `11434`:
+14. If you want to confirm Ollama is listening on port `11434`:
 
 ```powershell
 ss -ltnp | grep 11434
@@ -179,12 +168,32 @@ ss -ltnp | grep 11434
 
 `ollama ps` only shows active model processes. An empty table there does not mean the Ollama server is down.
 
+15. If you want to share the app over Tailscale, open another VS Code terminal and check that Tailscale is connected:
+
+```powershell
+tailscale status
+```
+
+16. Serve the app over Tailscale:
+
+```powershell
+tailscale serve 8000
+```
+
+17. Confirm what Tailscale is serving:
+
+```powershell
+tailscale serve status
+```
+
+18. Open the local URL above, or open the HTTPS tailnet URL printed by `tailscale serve`.
+
 ## Ask The Local LLM
 
 The normal WebSocket chat between `user_a` and `user_b` is unchanged. To query the local model instead, type into the same message box and click `Ask LLM`.
 
 - Backend target: `http://localhost:11434`
-- Default model: `qwen3:14b`
+- Default model: `gpt-oss:20b`
 - Endpoint: `POST /api/llm/message`
 
 Example request body:
