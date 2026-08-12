@@ -1,22 +1,47 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
-DB_PATH = Path(__file__).resolve().parent.parent / "messages.sqlite3"
+BASE_DIR = Path(__file__).resolve().parent.parent
+SESSIONS_DIR = BASE_DIR / "sessions"
+SESSION_ID_PATTERN = re.compile(r"[^A-Za-z0-9_-]+")
 
 
-def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+def sanitize_session_id(session_id: str) -> str:
+    cleaned = SESSION_ID_PATTERN.sub("-", str(session_id).strip())
+    cleaned = cleaned.strip("-")
+    if not cleaned:
+        raise ValueError("Session ID must contain at least one letter or number.")
+    return cleaned
+
+
+def get_db_path(session_id: str) -> Path:
+    safe_session_id = sanitize_session_id(session_id)
+    return SESSIONS_DIR / f"{safe_session_id}.sqlite3"
+
+
+def ensure_sessions_dir() -> None:
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_connection(session_id: str) -> sqlite3.Connection:
+    ensure_sessions_dir()
+    conn = sqlite3.connect(get_db_path(session_id))
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def init_db() -> None:
-    with get_connection() as conn:
+def init_db(session_id: str | None = None) -> None:
+    ensure_sessions_dir()
+    if session_id is None:
+        return
+
+    with get_connection(session_id) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS messages (
@@ -59,7 +84,8 @@ def log_message(
     session_id: str,
     experimental_condition: str,
 ) -> int:
-    with get_connection() as conn:
+    init_db(session_id)
+    with get_connection(session_id) as conn:
         cursor = conn.execute(
             """
             INSERT INTO messages (
@@ -84,38 +110,33 @@ def log_message(
         return int(cursor.lastrowid)
 
 
-def mark_delivered(message_id: int, delivered_timestamp: str) -> None:
-    with get_connection() as conn:
+def mark_delivered(session_id: str, message_id: int, delivered_timestamp: str) -> None:
+    init_db(session_id)
+    with get_connection(session_id) as conn:
         conn.execute(
             "UPDATE messages SET delivered_timestamp = ? WHERE id = ?",
             (delivered_timestamp, message_id),
         )
 
 
-def list_messages(session_id: str | None = None) -> list[dict[str, Any]]:
-    sql = "SELECT * FROM messages"
-    params: tuple[str, ...] = ()
-    if session_id:
-        sql += " WHERE session_id = ?"
-        params = (session_id,)
-    sql += " ORDER BY id ASC"
-
-    with get_connection() as conn:
-        rows = conn.execute(sql, params).fetchall()
+def list_messages(session_id: str) -> list[dict[str, Any]]:
+    init_db(session_id)
+    with get_connection(session_id) as conn:
+        rows = conn.execute("SELECT * FROM messages ORDER BY id ASC").fetchall()
         return [dict(row) for row in rows]
 
 
 def list_recent_messages(session_id: str, limit: int = 12) -> list[dict[str, Any]]:
-    with get_connection() as conn:
+    init_db(session_id)
+    with get_connection(session_id) as conn:
         rows = conn.execute(
             """
             SELECT *
             FROM messages
-            WHERE session_id = ?
             ORDER BY id DESC
             LIMIT ?
             """,
-            (session_id, limit),
+            (limit,),
         ).fetchall()
         return [dict(row) for row in reversed(rows)]
 
@@ -129,7 +150,8 @@ def log_llm_interaction(
     input_text: str,
     output_text: str,
 ) -> int:
-    with get_connection() as conn:
+    init_db(session_id)
+    with get_connection(session_id) as conn:
         cursor = conn.execute(
             """
             INSERT INTO llm_interactions (
@@ -145,3 +167,10 @@ def log_llm_interaction(
             (timestamp, session_id, user_id, model, input_text, output_text),
         )
         return int(cursor.lastrowid)
+
+
+def list_llm_interactions(session_id: str) -> list[dict[str, Any]]:
+    init_db(session_id)
+    with get_connection(session_id) as conn:
+        rows = conn.execute("SELECT * FROM llm_interactions ORDER BY id ASC").fetchall()
+        return [dict(row) for row in rows]

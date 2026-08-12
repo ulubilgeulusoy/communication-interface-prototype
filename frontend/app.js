@@ -165,6 +165,18 @@ function appendMessageToThread(message) {
   updateSelectionStyles(message.thread);
 }
 
+function resetThread(thread) {
+  if (thread === "user") {
+    userThread = [];
+    userMessagesEl.innerHTML = "";
+    syncEmptyState(userMessagesEl, userThread);
+  } else {
+    llmThread = [];
+    llmMessagesEl.innerHTML = "";
+    syncEmptyState(llmMessagesEl, llmThread);
+  }
+}
+
 function appendUserThreadMessage(payload, direction) {
   appendMessageToThread({
     id: String(payload.id ?? buildClientMessageId("user")),
@@ -176,6 +188,21 @@ function appendUserThreadMessage(payload, direction) {
     timestamp: payload.sent_timestamp,
     deliveredTimestamp: payload.delivered_timestamp ?? null,
     receivedTimestamp: direction === "incoming" ? new Date().toISOString() : null,
+  });
+}
+
+function appendHistoricalUserMessage(message) {
+  const isOutgoing = message.sender === userInput.value;
+  appendMessageToThread({
+    id: String(message.id),
+    thread: "user",
+    appearance: isOutgoing ? "outgoing" : "incoming",
+    sender: message.sender,
+    receiver: message.receiver,
+    body: normalizeMessageText(message.content),
+    timestamp: message.sent_timestamp,
+    deliveredTimestamp: message.delivered_timestamp ?? null,
+    receivedTimestamp: isOutgoing ? null : message.delivered_timestamp ?? message.sent_timestamp,
   });
 }
 
@@ -206,6 +233,34 @@ function appendLlmReplyMessage(payload) {
     timestamp: payload.timestamp,
     sessionId: payload.session_id,
     model: payload.model,
+  });
+}
+
+function appendHistoricalLlmInteraction(interaction) {
+  appendMessageToThread({
+    id: `llm-user-history-${interaction.id}`,
+    thread: "llm",
+    appearance: "llm-user",
+    role: "user",
+    sender: interaction.user_id,
+    receiver: "llm",
+    body: normalizeMessageText(interaction.input_text),
+    timestamp: interaction.timestamp,
+    sessionId: interaction.session_id,
+    model: "prompt",
+  });
+
+  appendMessageToThread({
+    id: `llm-assistant-history-${interaction.id}`,
+    thread: "llm",
+    appearance: "llm-assistant",
+    role: "assistant",
+    sender: "llm",
+    receiver: interaction.user_id,
+    body: normalizeMessageText(interaction.output_text),
+    timestamp: interaction.timestamp,
+    sessionId: interaction.session_id,
+    model: interaction.model,
   });
 }
 
@@ -384,6 +439,27 @@ async function loadCondition(sessionId) {
   const data = await response.json();
   currentCondition = data.experimental_condition;
   conditionLabel.textContent = `Condition: ${currentCondition}`;
+  sessionInput.value = data.session_id;
+}
+
+async function loadSessionHistory(sessionId) {
+  const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}/history`);
+  const data = await response.json();
+
+  resetThread("user");
+  resetThread("llm");
+  clearAllSelections();
+  setLlmStatus("");
+
+  for (const message of data.messages) {
+    appendHistoricalUserMessage(message);
+  }
+
+  for (const interaction of data.llm_interactions) {
+    appendHistoricalLlmInteraction(interaction);
+  }
+
+  sessionInput.value = data.session_id;
 }
 
 async function connect(userId, sessionId) {
@@ -392,6 +468,7 @@ async function connect(userId, sessionId) {
   }
 
   await loadCondition(sessionId);
+  await loadSessionHistory(sessionInput.value.trim());
 
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   socket = new WebSocket(`${protocol}://${window.location.host}/ws/${encodeURIComponent(userId)}`);

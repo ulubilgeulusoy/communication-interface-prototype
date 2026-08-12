@@ -10,11 +10,13 @@ from pydantic import BaseModel, Field
 
 from .db import (
     init_db,
+    list_llm_interactions,
     list_messages,
     list_recent_messages,
     log_llm_interaction,
     log_message,
     mark_delivered,
+    sanitize_session_id,
     utc_now_iso,
 )
 from .experiment import assign_condition
@@ -43,6 +45,12 @@ class LLMReply(BaseModel):
     model: str
     output_text: str
     timestamp: str
+
+
+class SessionHistory(BaseModel):
+    session_id: str
+    messages: list[dict]
+    llm_interactions: list[dict]
 
 
 def build_conversation_history(session_id: str, limit: int = LLM_HISTORY_LIMIT) -> str:
@@ -97,21 +105,34 @@ def index() -> FileResponse:
 
 @app.get("/api/condition/{session_id}")
 def get_condition(session_id: str) -> dict[str, str]:
+    safe_session_id = sanitize_session_id(session_id)
     return {
-        "session_id": session_id,
-        "experimental_condition": assign_condition(session_id),
+        "session_id": safe_session_id,
+        "experimental_condition": assign_condition(safe_session_id),
     }
 
 
 @app.get("/api/messages")
-def get_messages(session_id: str | None = Query(default=None)) -> list[dict]:
-    return list_messages(session_id)
+def get_messages(session_id: str = Query(..., min_length=1)) -> list[dict]:
+    safe_session_id = sanitize_session_id(session_id)
+    return list_messages(safe_session_id)
+
+
+@app.get("/api/session/{session_id}/history", response_model=SessionHistory)
+def get_session_history(session_id: str) -> SessionHistory:
+    safe_session_id = sanitize_session_id(session_id)
+    return SessionHistory(
+        session_id=safe_session_id,
+        messages=list_messages(safe_session_id),
+        llm_interactions=list_llm_interactions(safe_session_id),
+    )
 
 
 @app.post("/api/llm/message", response_model=LLMReply)
 async def ask_llm(payload: LLMRequest) -> LLMReply:
+    safe_session_id = sanitize_session_id(payload.session_id)
     timestamp = utc_now_iso()
-    conversation_history = build_conversation_history(payload.session_id)
+    conversation_history = build_conversation_history(safe_session_id)
 
     try:
         reply = await ollama_service.generate_reply(
@@ -124,7 +145,7 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
 
     log_llm_interaction(
         timestamp=timestamp,
-        session_id=payload.session_id,
+        session_id=safe_session_id,
         user_id=payload.user_id,
         model=reply.model or payload.model or DEFAULT_MODEL,
         input_text=payload.message_text,
@@ -132,7 +153,7 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
     )
 
     return LLMReply(
-        session_id=payload.session_id,
+        session_id=safe_session_id,
         user_id=payload.user_id,
         model=reply.model,
         output_text=reply.output_text,
@@ -150,7 +171,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
 
             receiver = str(data["receiver"])
             content = str(data["content"])
-            session_id = str(data["session_id"])
+            session_id = sanitize_session_id(str(data["session_id"]))
             experimental_condition = str(
                 data.get("experimental_condition") or assign_condition(session_id)
             )
@@ -179,7 +200,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
             delivered = await manager.send_to_user(receiver, {"type": "message", **message})
             if delivered:
                 delivered_timestamp = utc_now_iso()
-                mark_delivered(message_id, delivered_timestamp)
+                mark_delivered(session_id, message_id, delivered_timestamp)
                 message["delivered_timestamp"] = delivered_timestamp
 
             await websocket.send_json({"type": "ack", "delivered": delivered, **message})
