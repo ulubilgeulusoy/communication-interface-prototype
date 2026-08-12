@@ -293,14 +293,33 @@ h2 {
 
 .message.is-selected {
   border-color: var(--selected-border);
-  box-shadow: 0 0 0 3px rgba(184, 110, 44, 0.16);
-  background: linear-gradient(180deg, var(--selected), #f8e7c6);
+  box-shadow:
+    0 0 0 4px rgba(184, 110, 44, 0.18),
+    0 16px 30px rgba(104, 63, 24, 0.16);
+  transform: translateY(-2px) scale(1.01);
 }
 
 .message p {
   margin: 0.4rem 0;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.message.is-selected::after {
+  align-items: center;
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  border-radius: 999px;
+  box-shadow: 0 10px 18px rgba(138, 49, 19, 0.24);
+  color: #fffaf5;
+  content: "Selected";
+  display: inline-flex;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.22rem 0.55rem;
+  position: absolute;
+  right: 0.8rem;
+  top: -0.6rem;
 }
 
 .message-meta,

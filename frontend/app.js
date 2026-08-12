@@ -122,7 +122,7 @@ function createMetaText(message) {
 function createDeliveryText(message) {
   if (message.thread === "user") {
     if (message.appearance === "incoming") {
-      return message.deliveredTimestamp ? `Received ${message.deliveredTimestamp}` : "Received";
+      return message.receivedTimestamp ? `Received ${message.receivedTimestamp}` : "Received";
     }
 
     return message.deliveredTimestamp ? `Delivered ${message.deliveredTimestamp}` : "Sending";
@@ -173,6 +173,7 @@ function appendUserThreadMessage(payload, direction) {
     body: normalizeMessageText(payload.content),
     timestamp: payload.sent_timestamp,
     deliveredTimestamp: payload.delivered_timestamp ?? null,
+    receivedTimestamp: direction === "incoming" ? new Date().toISOString() : null,
   });
 }
 
@@ -481,6 +482,7 @@ llmMessagesEl.addEventListener("contextmenu", (event) => {
 contextMenuEl.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) {
+    hideContextMenu();
     return;
   }
 
