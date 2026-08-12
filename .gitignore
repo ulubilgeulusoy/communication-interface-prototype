@@ -41,3 +41,9 @@ temp/
 node_modules/
 dist/
 build/
+
+# Local RAG knowledge-base contents
+knowledge_base/**
+!knowledge_base/
+!knowledge_base/**/
+!knowledge_base/**/.gitkeep
