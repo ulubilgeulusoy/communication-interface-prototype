@@ -75,7 +75,10 @@
             <div>
               <h2>LLM Chat</h2>
             </div>
-            <p class="thread-note">The local model stays in its own thread and can receive forwarded messages.</p>
+            <div class="thread-tools">
+              <p class="thread-note">The local model stays in its own thread and can receive forwarded messages.</p>
+              <button type="button" id="reindex-button" class="ghost-button">Re-index Knowledge Base</button>
+            </div>
           </div>
 
           <div id="llm-messages" class="messages" aria-live="polite"></div>

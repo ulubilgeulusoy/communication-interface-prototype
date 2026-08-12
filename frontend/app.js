@@ -14,6 +14,7 @@ const userSelectionStatusEl = document.querySelector("#user-selection-status");
 const llmSelectionStatusEl = document.querySelector("#llm-selection-status");
 const llmStatusEl = document.querySelector("#llm-status");
 const askLlmButton = document.querySelector("#ask-llm-button");
+const reindexButton = document.querySelector("#reindex-button");
 const contextMenuEl = document.querySelector("#message-menu");
 const contextMenuBackdropEl = document.querySelector("#message-menu-backdrop");
 
@@ -411,6 +412,32 @@ async function sendMessageToLlm(content) {
   }
 }
 
+async function reindexKnowledgeBase() {
+  reindexButton.disabled = true;
+  setLlmStatus("Re-indexing knowledge base...");
+
+  try {
+    const response = await fetch("/api/rag/reindex", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "Knowledge-base re-index failed");
+    }
+
+    setLlmStatus(
+      `Indexed ${data.indexed_files} file(s) and ${data.indexed_chunks} chunk(s) using ${data.embedding_model}`,
+    );
+  } catch (error) {
+    setLlmStatus(error.message || "Knowledge-base re-index failed");
+  } finally {
+    reindexButton.disabled = false;
+  }
+}
+
 async function forwardSelection(targetThread) {
   if (!contextThread) {
     return;
@@ -556,6 +583,10 @@ llmForm.addEventListener("submit", async (event) => {
   if (sent) {
     llmContentInput.value = "";
   }
+});
+
+reindexButton.addEventListener("click", async () => {
+  await reindexKnowledgeBase();
 });
 
 userMessagesEl.addEventListener("click", (event) => {

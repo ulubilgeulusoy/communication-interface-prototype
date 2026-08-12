@@ -222,6 +222,7 @@ The RAG indexer uses a separate Ollama embedding model from the chat model.
 
 - Chat/generation model: `gpt-oss:20b`
 - Embedding model: `nomic-embed-text`
+- The UI also includes a `Re-index Knowledge Base` button in the `LLM Chat` panel for manual refreshes after you add or change files.
 
 Index the local `knowledge_base/` files into `vector_store/` with:
 

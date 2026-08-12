@@ -21,7 +21,14 @@ from .db import (
 )
 from .experiment import assign_condition
 from .llm_service import DEFAULT_MODEL, OllamaService, OllamaServiceError
+from .rag.embeddings import EmbeddingServiceError
+from .rag.index_knowledge import (
+    KNOWLEDGE_BASE_PATH,
+    run_indexing,
+)
+from .rag.ingest import load_documents
 from .rag.rag_service import RAGService
+from .rag.retrieval import DEFAULT_COLLECTION_NAME, DEFAULT_VECTOR_STORE_PATH, RetrievalServiceError
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -55,6 +62,14 @@ class SessionHistory(BaseModel):
     session_id: str
     messages: list[dict]
     llm_interactions: list[dict]
+
+
+class RAGReindexReply(BaseModel):
+    indexed_files: int
+    indexed_chunks: int
+    collection_name: str
+    embedding_model: str
+    knowledge_base_path: str
 
 
 def build_conversation_history(session_id: str, limit: int = LLM_HISTORY_LIMIT) -> str:
@@ -181,6 +196,29 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
         timestamp=timestamp,
         retrieved_chunks=retrieved_chunks_payload,
         used_retrieval=rag_reply.used_retrieval,
+    )
+
+
+@app.post("/api/rag/reindex", response_model=RAGReindexReply)
+async def reindex_knowledge_base() -> RAGReindexReply:
+    try:
+        indexed_chunks = await run_indexing(
+            knowledge_base_path=KNOWLEDGE_BASE_PATH,
+            vector_store_path=DEFAULT_VECTOR_STORE_PATH,
+            collection_name=DEFAULT_COLLECTION_NAME,
+            embedding_model=rag_service.embedding_service.model,
+            chunk_size=1000,
+            chunk_overlap=200,
+        )
+    except (EmbeddingServiceError, RetrievalServiceError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    indexed_files = len(load_documents(KNOWLEDGE_BASE_PATH))
+    return RAGReindexReply(
+        indexed_files=indexed_files,
+        indexed_chunks=indexed_chunks,
+        collection_name=DEFAULT_COLLECTION_NAME,
+        embedding_model=rag_service.embedding_service.model,
+        knowledge_base_path=str(KNOWLEDGE_BASE_PATH),
     )
 
 
