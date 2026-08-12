@@ -1,14 +1,17 @@
 # Tailscale Communication Interface Prototype
 
-Minimal two-user communication web app for prototyping real-time interaction over a Tailscale tailnet. It uses a FastAPI backend, WebSocket messaging, a plain HTML/JavaScript frontend, SQLite message logging, and optional local Ollama-backed LLM replies.
+Minimal two-user communication web app for prototyping real-time interaction over a Tailscale tailnet. It uses a FastAPI backend, WebSocket messaging, a plain HTML/JavaScript frontend, per-session SQLite storage, and optional local Ollama-backed LLM replies.
 
 ## Features
 
 - Two browser clients can connect as `user_a` and `user_b`.
 - Messages are sent over WebSockets in real time.
-- SQLite logs sender, receiver, content, sent timestamp, delivered timestamp, session ID, and experimental condition.
+- Each session is stored in its own SQLite file and can be reopened by using the same session ID.
+- User chat and LLM chat are shown in separate side-by-side panes.
+- Messages can be multi-selected and forwarded between the user chat and LLM chat.
+- Message timing includes sent, delivered, and client-side received status in the UI.
 - A separate backend LLM service can query local Ollama at `http://localhost:11434`.
-- LLM interactions are logged in SQLite with timestamp, session, user, model, prompt, and response.
+- LLM interactions are logged alongside each session with timestamp, user, model, prompt, and response.
 - Frontend, backend, and experimental condition assignment are kept in separate modules.
 
 ## Project Structure
@@ -16,7 +19,7 @@ Minimal two-user communication web app for prototyping real-time interaction ove
 ```text
 app/
   main.py          FastAPI app, WebSocket routing, API endpoints
-  db.py            SQLite setup and message logging helpers
+  db.py            Per-session SQLite setup and message logging helpers
   experiment.py    Experimental condition assignment logic
   llm_service.py   Local Ollama integration and response handling
 frontend/
@@ -152,7 +155,7 @@ http://127.0.0.1:8000
 
 11. Test normal chat by sending a message between the two users.
 
-12. Test the LLM path by entering a prompt and clicking `Ask LLM`.
+12. Test the LLM path by entering a prompt in the `LLM Chat` pane and clicking `Send to LLM`.
 
 13. If you want to confirm the app is listening on port `8000`:
 
@@ -188,9 +191,13 @@ tailscale serve status
 
 18. Open the local URL above, or open the HTTPS tailnet URL printed by `tailscale serve`.
 
+## Session Behavior
+
+Each session ID maps to its own SQLite file under `sessions/`. If you reconnect later with the same session ID, the app reloads both the user chat history and the LLM chat history and continues from there.
+
 ## Ask The Local LLM
 
-The normal WebSocket chat between `user_a` and `user_b` is unchanged. To query the local model instead, type into the same message box and click `Ask LLM`.
+The normal WebSocket chat between `user_a` and `user_b` is unchanged. To query the local model instead, type into the `LLM Chat` pane and click `Send to LLM`.
 
 - Backend target: `http://localhost:11434`
 - Default model: `gpt-oss:20b`
@@ -244,14 +251,14 @@ This setup is intended for tailnet-only prototyping. It does not make the app pu
 
 ## Inspect Logged Data
 
-The app creates `messages.sqlite3` in the repository root. Human messages are available through:
+The app creates one SQLite file per session under `sessions/`. Human messages for a session are available through:
 
 ```text
-http://127.0.0.1:8000/api/messages
 http://127.0.0.1:8000/api/messages?session_id=session-001
+http://127.0.0.1:8000/api/session/session-001/history
 ```
 
-The same SQLite database also contains an `llm_interactions` table for model request/response logging.
+Each session database also contains an `llm_interactions` table for model request/response logging.
 
 ## Experimental Logic
 
