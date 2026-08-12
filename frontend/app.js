@@ -121,7 +121,11 @@ function createMetaText(message) {
 
 function createDeliveryText(message) {
   if (message.thread === "user") {
-    return message.deliveredTimestamp ? `Delivered ${message.deliveredTimestamp}` : "Not delivered yet";
+    if (message.appearance === "incoming") {
+      return message.deliveredTimestamp ? `Received ${message.deliveredTimestamp}` : "Received";
+    }
+
+    return message.deliveredTimestamp ? `Delivered ${message.deliveredTimestamp}` : "Sending";
   }
 
   if (message.role === "user") {
