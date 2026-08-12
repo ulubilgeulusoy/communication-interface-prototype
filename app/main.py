@@ -21,6 +21,7 @@ from .db import (
 )
 from .experiment import assign_condition
 from .llm_service import DEFAULT_MODEL, OllamaService, OllamaServiceError
+from .rag.rag_service import RAGService
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -29,6 +30,7 @@ STATIC_DIR = BASE_DIR / "frontend"
 app = FastAPI(title="Two-User Communication Prototype")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 ollama_service = OllamaService()
+rag_service = RAGService(ollama_service)
 LLM_HISTORY_LIMIT = 12
 
 
@@ -45,6 +47,8 @@ class LLMReply(BaseModel):
     model: str
     output_text: str
     timestamp: str
+    retrieved_chunks: list[dict] = Field(default_factory=list)
+    used_retrieval: bool = False
 
 
 class SessionHistory(BaseModel):
@@ -135,29 +139,48 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
     conversation_history = build_conversation_history(safe_session_id)
 
     try:
-        reply = await ollama_service.generate_reply(
+        rag_reply = await rag_service.generate_reply(
             message_text=payload.message_text,
+            session_id=safe_session_id,
             conversation_history=conversation_history,
             model=payload.model,
         )
     except OllamaServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    retrieved_chunks_payload = [
+        {
+            "chunk_id": chunk.chunk_id,
+            "source_path": chunk.source_path,
+            "filename": chunk.filename,
+            "category": chunk.category,
+            "chunk_index": chunk.chunk_index,
+            "start_char": chunk.start_char,
+            "end_char": chunk.end_char,
+            "similarity_distance": chunk.similarity_distance,
+            "collection_name": chunk.collection_name,
+        }
+        for chunk in rag_reply.retrieved_chunks
+    ]
+
     log_llm_interaction(
         timestamp=timestamp,
         session_id=safe_session_id,
         user_id=payload.user_id,
-        model=reply.model or payload.model or DEFAULT_MODEL,
+        model=rag_reply.llm_response.model or payload.model or DEFAULT_MODEL,
         input_text=payload.message_text,
-        output_text=reply.output_text,
+        output_text=rag_reply.llm_response.output_text,
+        retrieved_sources_json=json.dumps(retrieved_chunks_payload),
     )
 
     return LLMReply(
         session_id=safe_session_id,
         user_id=payload.user_id,
-        model=reply.model,
-        output_text=reply.output_text,
+        model=rag_reply.llm_response.model,
+        output_text=rag_reply.llm_response.output_text,
         timestamp=timestamp,
+        retrieved_chunks=retrieved_chunks_payload,
+        used_retrieval=rag_reply.used_retrieval,
     )
 
 

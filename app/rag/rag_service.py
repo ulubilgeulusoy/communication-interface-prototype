@@ -49,6 +49,7 @@ class RAGReply:
     llm_response: LLMResponse
     retrieved_chunks: list[RetrievedChunk]
     augmented_message: str
+    used_retrieval: bool
 
 
 class RAGService:
@@ -99,7 +100,32 @@ class RAGService:
                 collection_name=self.collection_name,
             )
         except (EmbeddingServiceError, RetrievalServiceError) as exc:
-            raise RAGServiceError(str(exc)) from exc
+            llm_response = await self.llm_service.generate_reply(
+                message_text=cleaned_message,
+                conversation_history=conversation_history,
+                model=model,
+                system_prompt=system_prompt,
+            )
+            return RAGReply(
+                llm_response=llm_response,
+                retrieved_chunks=[],
+                augmented_message=cleaned_message,
+                used_retrieval=False,
+            )
+
+        if not retrieved_chunks:
+            llm_response = await self.llm_service.generate_reply(
+                message_text=cleaned_message,
+                conversation_history=conversation_history,
+                model=model,
+                system_prompt=system_prompt,
+            )
+            return RAGReply(
+                llm_response=llm_response,
+                retrieved_chunks=[],
+                augmented_message=cleaned_message,
+                used_retrieval=False,
+            )
 
         augmented_message = self._build_augmented_message(
             message_text=cleaned_message,
@@ -118,6 +144,7 @@ class RAGService:
             llm_response=llm_response,
             retrieved_chunks=retrieved_chunks,
             augmented_message=augmented_message,
+            used_retrieval=True,
         )
 
     def _build_augmented_message(

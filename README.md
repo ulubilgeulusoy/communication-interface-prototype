@@ -42,6 +42,7 @@ Install and run Ollama locally, then pull the default model:
 
 ```powershell
 ollama pull gpt-oss:20b
+ollama pull nomic-embed-text
 ollama serve
 ```
 
@@ -116,7 +117,7 @@ If you get JSON back, Ollama is up.
 ollama list
 ```
 
-You should see `gpt-oss:20b` in the model list.
+You should see both `gpt-oss:20b` and `nomic-embed-text` in the model list.
 
 6. If `curl` in step 4 fails, start Ollama in a separate VS Code terminal:
 
@@ -214,6 +215,25 @@ Example request body:
 ```
 
 If Ollama is down or the model is unavailable, the app returns a `503` response and the frontend shows the error instead of crashing.
+
+## Index The Knowledge Base
+
+The RAG indexer uses a separate Ollama embedding model from the chat model.
+
+- Chat/generation model: `gpt-oss:20b`
+- Embedding model: `nomic-embed-text`
+
+Index the local `knowledge_base/` files into `vector_store/` with:
+
+```powershell
+python -m app.rag.index_knowledge
+```
+
+If the embedding model has not been pulled yet, run:
+
+```powershell
+ollama pull nomic-embed-text
+```
 
 ## Serve Over Tailscale
 

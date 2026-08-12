@@ -264,6 +264,10 @@ function appendHistoricalLlmInteraction(interaction) {
   });
 }
 
+function getCurrentUserId() {
+  return userInput.value.trim();
+}
+
 function toggleMessageSelection(thread, messageId, { additive = true } = {}) {
   const selectedIds = getSelectedIds(thread);
   if (!additive) {
@@ -445,6 +449,7 @@ async function loadCondition(sessionId) {
 async function loadSessionHistory(sessionId) {
   const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}/history`);
   const data = await response.json();
+  const currentUserId = getCurrentUserId();
 
   resetThread("user");
   resetThread("llm");
@@ -456,6 +461,9 @@ async function loadSessionHistory(sessionId) {
   }
 
   for (const interaction of data.llm_interactions) {
+    if (interaction.user_id !== currentUserId) {
+      continue;
+    }
     appendHistoricalLlmInteraction(interaction);
   }
 

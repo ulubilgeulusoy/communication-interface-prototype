@@ -65,9 +65,16 @@ def init_db(session_id: str | None = None) -> None:
                 user_id TEXT NOT NULL,
                 model TEXT NOT NULL,
                 input_text TEXT NOT NULL,
-                output_text TEXT NOT NULL
+                output_text TEXT NOT NULL,
+                retrieved_sources_json TEXT
             )
             """
+        )
+        _ensure_column(
+            conn,
+            table_name="llm_interactions",
+            column_name="retrieved_sources_json",
+            column_definition="TEXT",
         )
 
 
@@ -149,6 +156,7 @@ def log_llm_interaction(
     model: str,
     input_text: str,
     output_text: str,
+    retrieved_sources_json: str | None = None,
 ) -> int:
     init_db(session_id)
     with get_connection(session_id) as conn:
@@ -160,11 +168,20 @@ def log_llm_interaction(
                 user_id,
                 model,
                 input_text,
-                output_text
+                output_text,
+                retrieved_sources_json
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (timestamp, session_id, user_id, model, input_text, output_text),
+            (
+                timestamp,
+                session_id,
+                user_id,
+                model,
+                input_text,
+                output_text,
+                retrieved_sources_json,
+            ),
         )
         return int(cursor.lastrowid)
 
@@ -174,3 +191,22 @@ def list_llm_interactions(session_id: str) -> list[dict[str, Any]]:
     with get_connection(session_id) as conn:
         rows = conn.execute("SELECT * FROM llm_interactions ORDER BY id ASC").fetchall()
         return [dict(row) for row in rows]
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    *,
+    table_name: str,
+    column_name: str,
+    column_definition: str,
+) -> None:
+    existing_columns = {
+        row["name"]
+        for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    if column_name in existing_columns:
+        return
+
+    conn.execute(
+        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"
+    )
