@@ -374,7 +374,14 @@ h2 {
   min-width: 220px;
   padding: 0.35rem;
   position: fixed;
-  z-index: 20;
+  z-index: 30;
+}
+
+.context-menu-backdrop {
+  background: transparent;
+  inset: 0;
+  position: fixed;
+  z-index: 25;
 }
 
 .context-menu button {

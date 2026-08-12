@@ -15,6 +15,7 @@ const llmSelectionStatusEl = document.querySelector("#llm-selection-status");
 const llmStatusEl = document.querySelector("#llm-status");
 const askLlmButton = document.querySelector("#ask-llm-button");
 const contextMenuEl = document.querySelector("#message-menu");
+const contextMenuBackdropEl = document.querySelector("#message-menu-backdrop");
 
 let socket = null;
 let currentCondition = null;
@@ -25,6 +26,7 @@ let selectedUserMessageIds = new Set();
 let selectedLlmMessageIds = new Set();
 let contextThread = null;
 
+hideContextMenu();
 userMessagesEl.dataset.empty = "No user messages yet.";
 llmMessagesEl.dataset.empty = "No LLM messages yet.";
 syncEmptyState(userMessagesEl, userThread);
@@ -247,6 +249,10 @@ function getSelectedMessages(thread) {
 
 function hideContextMenu() {
   contextMenuEl.hidden = true;
+  contextMenuEl.style.display = "none";
+  contextMenuEl.style.pointerEvents = "none";
+  contextMenuBackdropEl.hidden = true;
+  contextMenuBackdropEl.style.display = "none";
   contextThread = null;
 }
 
@@ -258,7 +264,11 @@ function showContextMenu(event, thread) {
   sendUserButton.disabled = thread === "user";
   sendLlmButton.disabled = thread === "llm";
 
+  contextMenuBackdropEl.hidden = false;
+  contextMenuBackdropEl.style.display = "block";
   contextMenuEl.hidden = false;
+  contextMenuEl.style.display = "grid";
+  contextMenuEl.style.pointerEvents = "auto";
   contextMenuEl.style.left = `${event.clientX}px`;
   contextMenuEl.style.top = `${event.clientY}px`;
 }
@@ -503,6 +513,10 @@ contextMenuEl.addEventListener("click", async (event) => {
   }
 });
 
+contextMenuBackdropEl.addEventListener("pointerdown", () => {
+  hideContextMenu();
+});
+
 document.addEventListener("click", (event) => {
   if (!event.target.closest(".message")) {
     clearAllSelections();
@@ -513,11 +527,29 @@ document.addEventListener("click", (event) => {
   }
 });
 
+document.addEventListener(
+  "pointerdown",
+  (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    if (!event.target.closest(".context-menu") && !event.target.closest(".context-menu-backdrop")) {
+      hideContextMenu();
+    }
+  },
+  true,
+);
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     clearAllSelections();
     hideContextMenu();
   }
+});
+
+window.addEventListener("blur", () => {
+  hideContextMenu();
 });
 
 userInput.addEventListener("change", () => {
