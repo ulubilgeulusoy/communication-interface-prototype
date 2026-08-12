@@ -9,8 +9,9 @@ OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "gpt-oss:20b"
 DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful assistant inside a communication prototype. "
-    "You will receive recent chat history for the current session plus the user's "
-    "latest drafting request. Use the session history as context, and answer "
+    "You will receive recent user-to-user chat history for the current session, "
+    "recent LLM-thread history for the same user, and the user's latest drafting "
+    "request. Use that conversation context to maintain continuity, and answer "
     "clearly and concisely."
 )
 
@@ -44,6 +45,7 @@ class OllamaService:
         *,
         message_text: str,
         conversation_history: str = "",
+        llm_thread_history: str = "",
         model: str | None = None,
         system_prompt: str | None = None,
     ) -> LLMResponse:
@@ -51,6 +53,7 @@ class OllamaService:
         prompt = system_prompt or self.system_prompt
         user_message = self._build_user_message(
             conversation_history=conversation_history,
+            llm_thread_history=llm_thread_history,
             message_text=message_text,
         )
 
@@ -82,13 +85,24 @@ class OllamaService:
 
         return LLMResponse(model=selected_model, output_text=output_text)
 
-    def _build_user_message(self, *, conversation_history: str, message_text: str) -> str:
-        if not conversation_history:
+    def _build_user_message(
+        self,
+        *,
+        conversation_history: str,
+        llm_thread_history: str,
+        message_text: str,
+    ) -> str:
+        sections: list[str] = []
+
+        if conversation_history:
+            sections.append(f"Recent session conversation:\n{conversation_history}")
+
+        if llm_thread_history:
+            sections.append(f"Recent LLM thread:\n{llm_thread_history}")
+
+        sections.append(f"User request:\n{message_text}")
+
+        if len(sections) == 1:
             return f"User request:\n{message_text}"
 
-        return (
-            "Recent session conversation:\n"
-            f"{conversation_history}\n\n"
-            "User request:\n"
-            f"{message_text}"
-        )
+        return "\n\n".join(sections)

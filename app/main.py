@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -12,6 +13,7 @@ from .db import (
     init_db,
     list_llm_interactions,
     list_messages,
+    list_recent_llm_interactions,
     list_recent_messages,
     log_llm_interaction,
     log_message,
@@ -39,6 +41,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 ollama_service = OllamaService()
 rag_service = RAGService(ollama_service)
 LLM_HISTORY_LIMIT = 12
+LLM_THREAD_HISTORY_LIMIT = 6
 
 
 class LLMRequest(BaseModel):
@@ -72,6 +75,9 @@ class RAGReindexReply(BaseModel):
     knowledge_base_path: str
 
 
+QUOTED_TITLE_PATTERN = re.compile(r'"([^"]{3,})"|\'([^\']{3,})\'')
+
+
 def build_conversation_history(session_id: str, limit: int = LLM_HISTORY_LIMIT) -> str:
     recent_messages = list_recent_messages(session_id, limit=limit)
     if not recent_messages:
@@ -87,6 +93,78 @@ def build_conversation_history(session_id: str, limit: int = LLM_HISTORY_LIMIT) 
         lines.append(f"{sender} to {receiver}: {content}")
 
     return "\n".join(lines)
+
+
+def build_llm_thread_history(
+    session_id: str,
+    *,
+    user_id: str,
+    limit: int = LLM_THREAD_HISTORY_LIMIT,
+) -> str:
+    recent_interactions = list_recent_llm_interactions(
+        session_id,
+        user_id=user_id,
+        limit=limit,
+    )
+    if not recent_interactions:
+        return ""
+
+    lines: list[str] = []
+    for interaction in recent_interactions:
+        prompt_text = str(interaction["input_text"]).strip()
+        reply_text = str(interaction["output_text"]).strip()
+        if prompt_text:
+            lines.append(f"User to LLM: {prompt_text}")
+        if reply_text:
+            lines.append(f"LLM to user: {reply_text}")
+
+    return "\n".join(lines)
+
+
+def infer_active_document_hint(
+    session_id: str,
+    *,
+    user_id: str,
+    limit: int = LLM_THREAD_HISTORY_LIMIT,
+) -> str:
+    recent_interactions = list_recent_llm_interactions(
+        session_id,
+        user_id=user_id,
+        limit=limit,
+    )
+    for interaction in reversed(recent_interactions):
+        retrieved_sources = _parse_retrieved_sources(interaction.get("retrieved_sources_json"))
+        if retrieved_sources:
+            first_source = retrieved_sources[0]
+            filename = str(first_source.get("filename") or "").strip()
+            if filename:
+                return Path(filename).stem.replace("_", " ").replace("-", " ").strip()
+
+        prompt_text = str(interaction.get("input_text") or "").strip()
+        quoted_title = _extract_quoted_title(prompt_text)
+        if quoted_title:
+            return quoted_title
+
+    return ""
+
+
+def _parse_retrieved_sources(raw_value: object) -> list[dict]:
+    if not raw_value:
+        return []
+    try:
+        parsed = json.loads(str(raw_value))
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, dict)]
+
+
+def _extract_quoted_title(text: str) -> str:
+    match = QUOTED_TITLE_PATTERN.search(text)
+    if not match:
+        return ""
+    return str(match.group(1) or match.group(2) or "").strip()
 
 
 class ConnectionManager:
@@ -152,12 +230,22 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
     safe_session_id = sanitize_session_id(payload.session_id)
     timestamp = utc_now_iso()
     conversation_history = build_conversation_history(safe_session_id)
+    llm_thread_history = build_llm_thread_history(
+        safe_session_id,
+        user_id=payload.user_id,
+    )
+    active_document_hint = infer_active_document_hint(
+        safe_session_id,
+        user_id=payload.user_id,
+    )
 
     try:
         rag_reply = await rag_service.generate_reply(
             message_text=payload.message_text,
             session_id=safe_session_id,
             conversation_history=conversation_history,
+            llm_thread_history=llm_thread_history,
+            active_document_hint=active_document_hint,
             model=payload.model,
         )
     except OllamaServiceError as exc:

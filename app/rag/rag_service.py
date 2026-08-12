@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from ..llm_service import LLMResponse, OllamaService
 from .embeddings import (
@@ -42,6 +43,17 @@ DEFAULT_RAG_INSTRUCTIONS = (
 
 class RAGServiceError(Exception):
     """Raised when the RAG workflow cannot complete."""
+
+
+STEP_REFERENCE_PATTERN = re.compile(r"\bstep\s+\d+\b", re.IGNORECASE)
+DOCUMENT_REFERENCE_PATTERN = re.compile(r'"[^"]+"|\'[^\']+\'', re.IGNORECASE)
+FOLLOW_UP_PREFIXES = (
+    "what is",
+    "what does",
+    "show me",
+    "tell me",
+    "and",
+)
 
 
 @dataclass(frozen=True)
@@ -84,6 +96,8 @@ class RAGService:
         message_text: str,
         session_id: str,
         conversation_history: str = "",
+        llm_thread_history: str = "",
+        active_document_hint: str = "",
         model: str | None = None,
         system_prompt: str | None = None,
         top_k: int | None = None,
@@ -94,10 +108,15 @@ class RAGService:
         if not cleaned_message:
             raise RAGServiceError("User message cannot be empty.")
 
+        retrieval_message = self._rewrite_follow_up_query(
+            cleaned_message,
+            active_document_hint=active_document_hint,
+        )
+
         try:
-            query_embedding = await self.embedding_service.embed_text(cleaned_message)
+            query_embedding = await self.embedding_service.embed_text(retrieval_message)
             retrieved_chunks = search_chunks(
-                query=cleaned_message,
+                query=retrieval_message,
                 query_embedding=query_embedding,
                 top_k=top_k or self.top_k,
                 neighbor_window=self.neighbor_window,
@@ -108,13 +127,14 @@ class RAGService:
             llm_response = await self.llm_service.generate_reply(
                 message_text=cleaned_message,
                 conversation_history=conversation_history,
+                llm_thread_history=llm_thread_history,
                 model=model,
                 system_prompt=system_prompt,
             )
             return RAGReply(
                 llm_response=llm_response,
                 retrieved_chunks=[],
-                augmented_message=cleaned_message,
+                augmented_message=retrieval_message,
                 used_retrieval=False,
             )
 
@@ -122,18 +142,19 @@ class RAGService:
             llm_response = await self.llm_service.generate_reply(
                 message_text=cleaned_message,
                 conversation_history=conversation_history,
+                llm_thread_history=llm_thread_history,
                 model=model,
                 system_prompt=system_prompt,
             )
             return RAGReply(
                 llm_response=llm_response,
                 retrieved_chunks=[],
-                augmented_message=cleaned_message,
+                augmented_message=retrieval_message,
                 used_retrieval=False,
             )
 
         augmented_message = self._build_augmented_message(
-            message_text=cleaned_message,
+            message_text=retrieval_message,
             retrieved_chunks=retrieved_chunks,
         )
         selected_system_prompt = self._build_system_prompt(system_prompt)
@@ -141,6 +162,7 @@ class RAGService:
         llm_response = await self.llm_service.generate_reply(
             message_text=augmented_message,
             conversation_history=conversation_history,
+            llm_thread_history=llm_thread_history,
             model=model,
             system_prompt=selected_system_prompt,
         )
@@ -176,3 +198,26 @@ class RAGService:
     def _build_system_prompt(self, system_prompt: str | None) -> str:
         base_prompt = system_prompt or self.llm_service.system_prompt
         return f"{base_prompt} {self.rag_instructions}".strip()
+
+    def _rewrite_follow_up_query(
+        self,
+        message_text: str,
+        *,
+        active_document_hint: str,
+    ) -> str:
+        cleaned_hint = str(active_document_hint).strip()
+        if not cleaned_hint:
+            return message_text
+
+        lowered = message_text.lower()
+        has_step_reference = bool(STEP_REFERENCE_PATTERN.search(message_text))
+        has_document_reference = bool(DOCUMENT_REFERENCE_PATTERN.search(message_text))
+        looks_like_follow_up = lowered.startswith(FOLLOW_UP_PREFIXES)
+
+        if has_step_reference and not has_document_reference:
+            return f'In "{cleaned_hint}", {message_text}'
+
+        if looks_like_follow_up and not has_document_reference and len(message_text.split()) <= 10:
+            return f'About "{cleaned_hint}", {message_text}'
+
+        return message_text

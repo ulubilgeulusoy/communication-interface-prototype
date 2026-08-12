@@ -193,6 +193,27 @@ def list_llm_interactions(session_id: str) -> list[dict[str, Any]]:
         return [dict(row) for row in rows]
 
 
+def list_recent_llm_interactions(
+    session_id: str,
+    *,
+    user_id: str,
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    init_db(session_id)
+    with get_connection(session_id) as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM llm_interactions
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+
 def _ensure_column(
     conn: sqlite3.Connection,
     *,
