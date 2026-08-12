@@ -88,7 +88,7 @@ class ChromaRetrievalStore:
             collection.upsert(
                 ids=[item.chunk.chunk_id for item in indexed_chunks],
                 embeddings=[item.vector for item in indexed_chunks],
-                documents=[item.chunk.text for item in indexed_chunks],
+                documents=[item.chunk.embedding_text for item in indexed_chunks],
                 metadatas=[self._metadata_for_chunk(item.chunk) for item in indexed_chunks],
             )
         except Exception as exc:  # pragma: no cover - Chroma raises library-specific errors
@@ -100,12 +100,15 @@ class ChromaRetrievalStore:
         query: str,
         query_embedding: EmbeddingItem,
         top_k: int = DEFAULT_TOP_K,
+        neighbor_window: int = 1,
         collection_name: str | None = None,
     ) -> list[RetrievedChunk]:
         """Run similarity search against indexed chunks."""
 
         if top_k <= 0:
             raise RetrievalServiceError("top_k must be greater than 0.")
+        if neighbor_window < 0:
+            raise RetrievalServiceError("neighbor_window must be 0 or greater.")
 
         collection = self._get_collection(collection_name)
         try:
@@ -117,9 +120,17 @@ class ChromaRetrievalStore:
         except Exception as exc:  # pragma: no cover - Chroma raises library-specific errors
             raise RetrievalServiceError("Failed to query ChromaDB.") from exc
 
-        return self._build_retrieved_chunks(
+        retrieved = self._build_retrieved_chunks(
             results=results,
             collection_name=collection.name,
+        )
+        if not retrieved or neighbor_window == 0:
+            return retrieved
+
+        return self._expand_with_neighbors(
+            collection=collection,
+            retrieved=retrieved,
+            neighbor_window=neighbor_window,
         )
 
     def _get_collection(self, collection_name: str | None = None) -> Collection:
@@ -148,23 +159,85 @@ class ChromaRetrievalStore:
             "end_char": chunk.end_char,
         }
 
+    def _expand_with_neighbors(
+        self,
+        *,
+        collection: Collection,
+        retrieved: list[RetrievedChunk],
+        neighbor_window: int,
+    ) -> list[RetrievedChunk]:
+        ordered: list[RetrievedChunk] = []
+        seen_chunk_ids: set[str] = set()
+
+        for chunk in retrieved:
+            for neighbor in self._fetch_neighbors(
+                collection=collection,
+                source_path=chunk.source_path,
+                center_index=chunk.chunk_index,
+                neighbor_window=neighbor_window,
+            ):
+                if neighbor.chunk_id in seen_chunk_ids:
+                    continue
+                seen_chunk_ids.add(neighbor.chunk_id)
+                ordered.append(neighbor)
+
+        ordered.sort(key=lambda item: (item.source_path, item.chunk_index, item.chunk_id))
+        return ordered
+
+    def _fetch_neighbors(
+        self,
+        *,
+        collection: Collection,
+        source_path: str,
+        center_index: int,
+        neighbor_window: int,
+    ) -> list[RetrievedChunk]:
+        min_index = max(0, center_index - neighbor_window)
+        max_index = center_index + neighbor_window
+        try:
+            results = collection.get(
+                where={
+                    "$and": [
+                        {"source_path": source_path},
+                        {"chunk_index": {"$gte": min_index}},
+                        {"chunk_index": {"$lte": max_index}},
+                    ]
+                },
+                include=["documents", "metadatas"],
+            )
+        except Exception as exc:  # pragma: no cover
+            raise RetrievalServiceError("Failed to fetch neighboring chunks.") from exc
+
+        return self._build_retrieved_chunks(
+            results=results,
+            collection_name=collection.name,
+        )
+
     @staticmethod
     def _build_retrieved_chunks(
         *,
         results: dict[str, Any],
         collection_name: str,
     ) -> list[RetrievedChunk]:
-        documents = results.get("documents") or [[]]
-        metadatas = results.get("metadatas") or [[]]
-        distances = results.get("distances") or [[]]
-        ids = results.get("ids") or [[]]
+        documents = _normalize_result_rows(results.get("documents"))
+        metadatas = _normalize_result_rows(results.get("metadatas"))
+        distances = _normalize_result_rows(results.get("distances"))
+        ids = _normalize_result_rows(results.get("ids"))
+
+        if not ids:
+            return []
+
+        first_ids = ids[0]
+        first_documents = documents[0] if documents else [None] * len(first_ids)
+        first_metadatas = metadatas[0] if metadatas else [None] * len(first_ids)
+        first_distances = distances[0] if distances else [None] * len(first_ids)
 
         retrieved: list[RetrievedChunk] = []
         for chunk_id, document, metadata, distance in zip(
-            ids[0],
-            documents[0],
-            metadatas[0],
-            distances[0] if distances else [None] * len(ids[0]),
+            first_ids,
+            first_documents,
+            first_metadatas,
+            first_distances,
             strict=False,
         ):
             metadata = metadata or {}
@@ -207,6 +280,7 @@ def search_chunks(
     query: str,
     query_embedding: EmbeddingItem,
     top_k: int = DEFAULT_TOP_K,
+    neighbor_window: int = 1,
     store_path: Path = DEFAULT_VECTOR_STORE_PATH,
     collection_name: str = DEFAULT_COLLECTION_NAME,
 ) -> list[RetrievedChunk]:
@@ -220,4 +294,17 @@ def search_chunks(
         query=query,
         query_embedding=query_embedding,
         top_k=top_k,
+        neighbor_window=neighbor_window,
     )
+
+
+def _normalize_result_rows(value: Any) -> list[list[Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return []
+    if not value:
+        return []
+    if isinstance(value[0], list):
+        return value
+    return [value]

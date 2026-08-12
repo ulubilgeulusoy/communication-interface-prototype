@@ -19,7 +19,9 @@ from pypdf import PdfReader
 
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf"}
-WHITESPACE_PATTERN = re.compile(r"\s+")
+STEP_HEADER_PATTERN = re.compile(r"(?mi)(?:^|\n)\s*(step\s+\d+[\s:.-]|(?:\d+[\).:-]\s+))")
+LINE_WHITESPACE_PATTERN = re.compile(r"[^\S\n]+")
+THREE_PLUS_NEWLINES_PATTERN = re.compile(r"\n{3,}")
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class KnowledgeChunk:
 
     chunk_id: str
     text: str
+    embedding_text: str
     source_path: str
     filename: str
     category: str
@@ -139,10 +142,17 @@ def _chunk_document(
         adjusted_end = _find_chunk_boundary(text, start, end)
         chunk_text = text[start:adjusted_end].strip()
         if chunk_text:
+            chunk_id = f"{document.category}:{document.filename}:{chunk_index}"
             chunks.append(
                 KnowledgeChunk(
-                    chunk_id=f"{document.category}:{document.filename}:{chunk_index}",
+                    chunk_id=chunk_id,
                     text=chunk_text,
+                    embedding_text=_build_embedding_text(
+                        document=document,
+                        chunk_id=chunk_id,
+                        chunk_index=chunk_index,
+                        chunk_text=chunk_text,
+                    ),
                     source_path=document.source_path,
                     filename=document.filename,
                     category=document.category,
@@ -162,18 +172,32 @@ def _chunk_document(
 
 
 def _find_chunk_boundary(text: str, start: int, end: int) -> int:
-    """Prefer to end a chunk at whitespace when possible."""
+    """Prefer to end a chunk at structural boundaries when possible."""
 
     if end >= len(text):
         return len(text)
 
     window = text[start:end]
-    split_at = window.rfind(" ")
-    if split_at <= 0:
-        split_at = window.rfind("\n")
-    if split_at <= 0:
+    candidate_positions: list[int] = []
+
+    for match in STEP_HEADER_PATTERN.finditer(window):
+        if match.start() > 0:
+            candidate_positions.append(match.start())
+
+    for marker in ("\n\n", "\n", ". "):
+        position = window.rfind(marker)
+        if position > 0:
+            candidate_positions.append(position + (0 if marker.startswith("\n") else 1))
+
+    if not candidate_positions:
+        position = window.rfind(" ")
+        if position > 0:
+            candidate_positions.append(position)
+
+    if not candidate_positions:
         return end
-    return start + split_at
+
+    return start + max(candidate_positions)
 
 
 def _read_document_text(path: Path) -> str:
@@ -196,7 +220,8 @@ def _read_pdf_text(path: Path) -> str:
 def _normalize_text(text: str) -> str:
     normalized = text.replace("\x00", " ")
     normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
-    normalized = WHITESPACE_PATTERN.sub(" ", normalized)
+    normalized = LINE_WHITESPACE_PATTERN.sub(" ", normalized)
+    normalized = THREE_PLUS_NEWLINES_PATTERN.sub("\n\n", normalized)
     return normalized.strip()
 
 
@@ -205,3 +230,22 @@ def _infer_category(base_path: Path, path: Path) -> str:
     if len(relative_path.parts) <= 1:
         return "root"
     return relative_path.parts[0]
+
+
+def _build_embedding_text(
+    *,
+    document: SourceDocument,
+    chunk_id: str,
+    chunk_index: int,
+    chunk_text: str,
+) -> str:
+    filename_stem = Path(document.filename).stem.replace("_", " ").replace("-", " ")
+    return (
+        f"Document title: {filename_stem}\n"
+        f"Source file: {document.filename}\n"
+        f"Category: {document.category}\n"
+        f"Chunk id: {chunk_id}\n"
+        f"Chunk number: {chunk_index}\n"
+        "Document content:\n"
+        f"{chunk_text}"
+    )

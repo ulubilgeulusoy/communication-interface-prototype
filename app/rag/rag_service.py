@@ -34,7 +34,9 @@ from .retrieval import (
 DEFAULT_RAG_INSTRUCTIONS = (
     "Use the retrieved domain knowledge when it is relevant. "
     "If the retrieved context is incomplete or not applicable, say so clearly "
-    "and avoid inventing unsupported facts."
+    "and avoid inventing unsupported facts. "
+    "For procedures, prefer the retrieved steps exactly as written and call out "
+    "when a step sequence appears incomplete."
 )
 
 
@@ -61,7 +63,8 @@ class RAGService:
         *,
         embedding_service: OllamaEmbeddingService | None = None,
         collection_name: str = DEFAULT_COLLECTION_NAME,
-        top_k: int = DEFAULT_TOP_K,
+        top_k: int = 7,
+        neighbor_window: int = 1,
         vector_store_path: Path = DEFAULT_VECTOR_STORE_PATH,
         rag_instructions: str = DEFAULT_RAG_INSTRUCTIONS,
     ) -> None:
@@ -71,6 +74,7 @@ class RAGService:
         )
         self.collection_name = collection_name
         self.top_k = top_k
+        self.neighbor_window = neighbor_window
         self.vector_store_path = Path(vector_store_path)
         self.rag_instructions = rag_instructions
 
@@ -96,6 +100,7 @@ class RAGService:
                 query=cleaned_message,
                 query_embedding=query_embedding,
                 top_k=top_k or self.top_k,
+                neighbor_window=self.neighbor_window,
                 store_path=self.vector_store_path,
                 collection_name=self.collection_name,
             )
