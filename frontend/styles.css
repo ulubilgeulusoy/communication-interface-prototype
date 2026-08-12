@@ -323,6 +323,95 @@ h2 {
   word-break: break-word;
 }
 
+.message-body {
+  line-height: 1.55;
+  margin: 0.45rem 0;
+  word-break: break-word;
+}
+
+.message-body-plain {
+  white-space: pre-wrap;
+}
+
+.message-body-rich {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.message-body-rich > * {
+  margin: 0;
+}
+
+.message-body-rich p {
+  margin: 0;
+  white-space: normal;
+}
+
+.message-body-rich h2,
+.message-body-rich h3,
+.message-body-rich h4 {
+  color: #503312;
+  font-size: 1rem;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.message-body-rich ul,
+.message-body-rich ol {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.message-body-rich li {
+  padding-left: 0.1rem;
+}
+
+.message-body-rich blockquote {
+  background: rgba(255, 255, 255, 0.46);
+  border-left: 4px solid rgba(178, 76, 45, 0.55);
+  border-radius: 0 14px 14px 0;
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+}
+
+.message-body-rich blockquote p + p {
+  margin-top: 0.55rem;
+}
+
+.message-body-rich table {
+  border-collapse: collapse;
+  border-radius: 14px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.message-body-rich th,
+.message-body-rich td {
+  border: 1px solid rgba(80, 51, 18, 0.14);
+  padding: 0.6rem 0.7rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.message-body-rich th {
+  background: rgba(178, 76, 45, 0.12);
+  font-weight: 700;
+}
+
+.message-body-rich td {
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.message-body-rich em {
+  color: #5a4b38;
+}
+
+.message-body-rich strong {
+  color: #2d2115;
+}
+
 .message.is-selected::after {
   align-items: center;
   background: linear-gradient(135deg, var(--accent), var(--accent-deep));

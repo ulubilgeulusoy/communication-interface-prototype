@@ -152,8 +152,7 @@ function appendMessageToThread(message) {
   meta.className = "message-meta";
   meta.textContent = createMetaText(message);
 
-  const body = document.createElement("p");
-  body.textContent = message.body;
+  const body = buildMessageBody(message);
 
   const delivery = document.createElement("div");
   delivery.className = "delivery";
@@ -164,6 +163,284 @@ function appendMessageToThread(message) {
   container.scrollTop = container.scrollHeight;
   syncEmptyState(container, threadMessages);
   updateSelectionStyles(message.thread);
+}
+
+function buildMessageBody(message) {
+  if (message.thread === "llm" && message.role === "assistant") {
+    return renderRichMessageBody(message.body);
+  }
+
+  const body = document.createElement("p");
+  body.className = "message-body message-body-plain";
+  body.textContent = message.body;
+  return body;
+}
+
+function renderRichMessageBody(text) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "message-body message-body-rich";
+
+  const normalized = normalizeMessageText(text).replace(/\r\n/g, "\n");
+  if (!normalized) {
+    return wrapper;
+  }
+
+  const lines = normalized.split("\n");
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    if (isMarkdownTableStart(lines, index)) {
+      const { element, nextIndex } = renderTableBlock(lines, index);
+      wrapper.append(element);
+      index = nextIndex;
+      continue;
+    }
+
+    if (trimmed.startsWith(">")) {
+      const { element, nextIndex } = renderQuoteBlock(lines, index);
+      wrapper.append(element);
+      index = nextIndex;
+      continue;
+    }
+
+    if (isListLine(trimmed)) {
+      const { element, nextIndex } = renderListBlock(lines, index);
+      wrapper.append(element);
+      index = nextIndex;
+      continue;
+    }
+
+    const { element, nextIndex } = renderParagraphBlock(lines, index);
+    wrapper.append(element);
+    index = nextIndex;
+  }
+
+  return wrapper;
+}
+
+function renderParagraphBlock(lines, startIndex) {
+  const paragraphLines = [];
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const trimmed = lines[index].trim();
+    if (!trimmed) {
+      break;
+    }
+    if (paragraphLines.length > 0 && (isMarkdownTableStart(lines, index) || trimmed.startsWith(">") || isListLine(trimmed))) {
+      break;
+    }
+    paragraphLines.push(lines[index]);
+    index += 1;
+  }
+
+  const text = paragraphLines.join("\n").trim();
+  const headingMatch = text.match(/^(#{1,6})\s+(.*)$/);
+  if (headingMatch) {
+    const level = Math.min(6, headingMatch[1].length + 1);
+    const heading = document.createElement(`h${level}`);
+    appendInlineContent(heading, headingMatch[2]);
+    return { element: heading, nextIndex: index };
+  }
+
+  const paragraph = document.createElement("p");
+  appendInlineContent(paragraph, text);
+  return { element: paragraph, nextIndex: index };
+}
+
+function renderQuoteBlock(lines, startIndex) {
+  const blockquote = document.createElement("blockquote");
+  const quoteLines = [];
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const trimmed = lines[index].trim();
+    if (!trimmed) {
+      if (quoteLines.length > 0) {
+        quoteLines.push("");
+      }
+      index += 1;
+      continue;
+    }
+    if (!trimmed.startsWith(">")) {
+      break;
+    }
+    quoteLines.push(trimmed.replace(/^>\s?/, ""));
+    index += 1;
+  }
+
+  const quoteParagraphs = quoteLines.join("\n").split(/\n\s*\n/);
+  for (const chunk of quoteParagraphs) {
+    const paragraph = document.createElement("p");
+    appendInlineContent(paragraph, chunk.trim());
+    blockquote.append(paragraph);
+  }
+
+  return { element: blockquote, nextIndex: index };
+}
+
+function renderListBlock(lines, startIndex) {
+  const firstTrimmed = lines[startIndex].trim();
+  const ordered = /^\d+[.)]\s+/.test(firstTrimmed);
+  const list = document.createElement(ordered ? "ol" : "ul");
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const trimmed = lines[index].trim();
+    if (!trimmed) {
+      break;
+    }
+    if (!isListLine(trimmed)) {
+      break;
+    }
+
+    const item = document.createElement("li");
+    const text = trimmed.replace(/^([-*•]\s+|\d+[.)]\s+)/, "");
+    appendInlineContent(item, text);
+    list.append(item);
+    index += 1;
+  }
+
+  return { element: list, nextIndex: index };
+}
+
+function renderTableBlock(lines, startIndex) {
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const tbody = document.createElement("tbody");
+  table.append(thead, tbody);
+
+  const headerCells = splitTableRow(lines[startIndex]);
+  const headerRow = document.createElement("tr");
+  for (const cellText of headerCells) {
+    const cell = document.createElement("th");
+    appendInlineContent(cell, cellText);
+    headerRow.append(cell);
+  }
+  thead.append(headerRow);
+
+  let index = startIndex + 2;
+  while (index < lines.length) {
+    const trimmed = lines[index].trim();
+    if (!trimmed || !trimmed.includes("|")) {
+      break;
+    }
+
+    const row = document.createElement("tr");
+    for (const cellText of splitTableRow(lines[index])) {
+      const cell = document.createElement("td");
+      appendInlineContent(cell, cellText);
+      row.append(cell);
+    }
+    tbody.append(row);
+    index += 1;
+  }
+
+  return { element: table, nextIndex: index };
+}
+
+function appendInlineContent(parent, text) {
+  const normalized = String(text || "").replace(/ {2,}\n/g, "\n").trim();
+  const tokens = tokenizeInlineMarkdown(normalized);
+
+  for (const token of tokens) {
+    if (token.type === "text") {
+      parent.append(document.createTextNode(token.value));
+      continue;
+    }
+
+    if (token.type === "linebreak") {
+      parent.append(document.createElement("br"));
+      continue;
+    }
+
+    const element = document.createElement(token.type);
+    appendInlineContent(element, token.value);
+    parent.append(element);
+  }
+}
+
+function tokenizeInlineMarkdown(text) {
+  const tokens = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    if (text.startsWith("  \n", cursor)) {
+      tokens.push({ type: "linebreak", value: "" });
+      cursor += 3;
+      continue;
+    }
+
+    if (text[cursor] === "\n") {
+      tokens.push({ type: "text", value: " " });
+      cursor += 1;
+      continue;
+    }
+
+    const strongMarker = text.startsWith("**", cursor) ? "**" : text.startsWith("__", cursor) ? "__" : "";
+    if (strongMarker) {
+      const end = text.indexOf(strongMarker, cursor + 2);
+      if (end > cursor + 2) {
+        tokens.push({ type: "strong", value: text.slice(cursor + 2, end) });
+        cursor = end + 2;
+        continue;
+      }
+    }
+
+    const emphasisMarker = text[cursor] === "*" || text[cursor] === "_" ? text[cursor] : "";
+    if (emphasisMarker) {
+      const end = text.indexOf(emphasisMarker, cursor + 1);
+      if (end > cursor + 1) {
+        tokens.push({ type: "em", value: text.slice(cursor + 1, end) });
+        cursor = end + 1;
+        continue;
+      }
+    }
+
+    let nextSpecial = text.length;
+    for (const marker of ["**", "__", "*", "_", "\n"]) {
+      const nextIndex = text.indexOf(marker, cursor + 1);
+      if (nextIndex !== -1) {
+        nextSpecial = Math.min(nextSpecial, nextIndex);
+      }
+    }
+
+    tokens.push({ type: "text", value: text.slice(cursor, nextSpecial) });
+    cursor = nextSpecial;
+  }
+
+  return tokens.filter((token) => token.value !== "" || token.type === "linebreak");
+}
+
+function isListLine(trimmedLine) {
+  return /^([-*•]\s+|\d+[.)]\s+)/.test(trimmedLine);
+}
+
+function isMarkdownTableStart(lines, index) {
+  if (index + 1 >= lines.length) {
+    return false;
+  }
+
+  const header = lines[index].trim();
+  const divider = lines[index + 1].trim();
+  return header.includes("|") && /^[:|\-\s]+$/.test(divider) && divider.includes("-");
+}
+
+function splitTableRow(line) {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
 }
 
 function resetThread(thread) {
