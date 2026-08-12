@@ -38,9 +38,18 @@ pip install -r requirements.txt
 Install and run Ollama locally, then pull the default model:
 
 ```powershell
-ollama pull qwen3:8b
+ollama pull qwen3:14b
 ollama serve
 ```
+
+If `ollama serve` prints `bind: address already in use`, that usually means the Ollama daemon is already running on `127.0.0.1:11434`. In that case, do not start a second copy. Verify it with:
+
+```powershell
+curl http://127.0.0.1:11434/api/tags
+ss -ltnp | grep 11434
+```
+
+`ollama ps` can still be empty in this state. That command only shows models currently loaded for inference, not whether the Ollama server itself is running.
 
 ## Run
 
@@ -72,17 +81,19 @@ curl http://127.0.0.1:11434/api/tags
 
 If you get JSON back, Ollama is up.
 
-3. Check whether `qwen3:8b` is available:
+3. Check whether `qwen3:14b` is available:
 
 ```powershell
 ollama list
 ```
 
-4. If Ollama is not running yet, start it:
+4. If `curl` in step 2 fails, start Ollama:
 
 ```powershell
 ollama serve
 ```
+
+If `ollama serve` returns `bind: address already in use`, treat that as "Ollama is already running" and move on to the next step.
 
 5. Activate the virtual environment:
 
@@ -166,12 +177,14 @@ ss -ltnp | grep 8000
 ss -ltnp | grep 11434
 ```
 
+`ollama ps` only shows active model processes. An empty table there does not mean the Ollama server is down.
+
 ## Ask The Local LLM
 
 The normal WebSocket chat between `user_a` and `user_b` is unchanged. To query the local model instead, type into the same message box and click `Ask LLM`.
 
 - Backend target: `http://localhost:11434`
-- Default model: `qwen3:8b`
+- Default model: `qwen3:14b`
 - Endpoint: `POST /api/llm/message`
 
 Example request body:
