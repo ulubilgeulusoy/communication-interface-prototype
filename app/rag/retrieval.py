@@ -44,6 +44,7 @@ class RetrievedChunk:
     """A chunk returned from similarity search."""
 
     chunk_id: str
+    document_id: str
     text: str
     source_path: str
     filename: str
@@ -101,6 +102,7 @@ class ChromaRetrievalStore:
         query_embedding: EmbeddingItem,
         top_k: int = DEFAULT_TOP_K,
         neighbor_window: int = 1,
+        document_id: str | None = None,
         collection_name: str | None = None,
     ) -> list[RetrievedChunk]:
         """Run similarity search against indexed chunks."""
@@ -116,6 +118,7 @@ class ChromaRetrievalStore:
                 query_embeddings=[query_embedding.vector],
                 n_results=top_k,
                 include=["documents", "metadatas", "distances"],
+                where=self._build_where_filter(document_id=document_id),
             )
         except Exception as exc:  # pragma: no cover - Chroma raises library-specific errors
             raise RetrievalServiceError("Failed to query ChromaDB.") from exc
@@ -151,6 +154,7 @@ class ChromaRetrievalStore:
     def _metadata_for_chunk(chunk: KnowledgeChunk) -> dict[str, Any]:
         return {
             "chunk_id": chunk.chunk_id,
+            "document_id": chunk.document_id,
             "source_path": chunk.source_path,
             "filename": chunk.filename,
             "category": chunk.category,
@@ -172,7 +176,7 @@ class ChromaRetrievalStore:
         for chunk in retrieved:
             for neighbor in self._fetch_neighbors(
                 collection=collection,
-                source_path=chunk.source_path,
+                document_id=chunk.document_id,
                 center_index=chunk.chunk_index,
                 neighbor_window=neighbor_window,
             ):
@@ -188,7 +192,7 @@ class ChromaRetrievalStore:
         self,
         *,
         collection: Collection,
-        source_path: str,
+        document_id: str,
         center_index: int,
         neighbor_window: int,
     ) -> list[RetrievedChunk]:
@@ -198,7 +202,7 @@ class ChromaRetrievalStore:
             results = collection.get(
                 where={
                     "$and": [
-                        {"source_path": source_path},
+                        {"document_id": document_id},
                         {"chunk_index": {"$gte": min_index}},
                         {"chunk_index": {"$lte": max_index}},
                     ]
@@ -244,6 +248,7 @@ class ChromaRetrievalStore:
             retrieved.append(
                 RetrievedChunk(
                     chunk_id=str(metadata.get("chunk_id") or chunk_id),
+                    document_id=str(metadata.get("document_id") or ""),
                     text=str(document or ""),
                     source_path=str(metadata.get("source_path") or ""),
                     filename=str(metadata.get("filename") or ""),
@@ -257,6 +262,13 @@ class ChromaRetrievalStore:
             )
 
         return retrieved
+
+    @staticmethod
+    def _build_where_filter(*, document_id: str | None) -> dict[str, Any] | None:
+        cleaned_document_id = str(document_id or "").strip()
+        if not cleaned_document_id:
+            return None
+        return {"document_id": cleaned_document_id}
 
 
 def upsert_document_chunks(
@@ -281,6 +293,7 @@ def search_chunks(
     query_embedding: EmbeddingItem,
     top_k: int = DEFAULT_TOP_K,
     neighbor_window: int = 1,
+    document_id: str | None = None,
     store_path: Path = DEFAULT_VECTOR_STORE_PATH,
     collection_name: str = DEFAULT_COLLECTION_NAME,
 ) -> list[RetrievedChunk]:
@@ -295,6 +308,7 @@ def search_chunks(
         query_embedding=query_embedding,
         top_k=top_k,
         neighbor_window=neighbor_window,
+        document_id=document_id,
     )
 
 

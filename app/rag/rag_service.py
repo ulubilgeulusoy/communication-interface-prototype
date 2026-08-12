@@ -98,6 +98,7 @@ class RAGService:
         conversation_history: str = "",
         llm_thread_history: str = "",
         active_document_hint: str = "",
+        active_document_id: str = "",
         model: str | None = None,
         system_prompt: str | None = None,
         top_k: int | None = None,
@@ -120,6 +121,7 @@ class RAGService:
                 query_embedding=query_embedding,
                 top_k=top_k or self.top_k,
                 neighbor_window=self.neighbor_window,
+                document_id=active_document_id or None,
                 store_path=self.vector_store_path,
                 collection_name=self.collection_name,
             )

@@ -121,31 +121,39 @@ def build_llm_thread_history(
     return "\n".join(lines)
 
 
-def infer_active_document_hint(
+def infer_active_document_context(
     session_id: str,
     *,
     user_id: str,
     limit: int = LLM_THREAD_HISTORY_LIMIT,
-) -> str:
+) -> tuple[str, str]:
     recent_interactions = list_recent_llm_interactions(
         session_id,
         user_id=user_id,
         limit=limit,
     )
     for interaction in reversed(recent_interactions):
-        retrieved_sources = _parse_retrieved_sources(interaction.get("retrieved_sources_json"))
-        if retrieved_sources:
-            first_source = retrieved_sources[0]
-            filename = str(first_source.get("filename") or "").strip()
-            if filename:
-                return Path(filename).stem.replace("_", " ").replace("-", " ").strip()
-
         prompt_text = str(interaction.get("input_text") or "").strip()
         quoted_title = _extract_quoted_title(prompt_text)
-        if quoted_title:
-            return quoted_title
+        retrieved_sources = _parse_retrieved_sources(interaction.get("retrieved_sources_json"))
+        if retrieved_sources:
+            matched_source = _find_matching_source(retrieved_sources, quoted_title)
+            if matched_source:
+                return matched_source
 
-    return ""
+            first_source = retrieved_sources[0]
+            filename = str(first_source.get("filename") or "").strip()
+            document_id = str(first_source.get("document_id") or "").strip()
+            if filename or document_id:
+                return (
+                    Path(filename).stem.replace("_", " ").replace("-", " ").strip(),
+                    document_id,
+                )
+
+        if quoted_title:
+            return quoted_title, ""
+
+    return "", ""
 
 
 def _parse_retrieved_sources(raw_value: object) -> list[dict]:
@@ -165,6 +173,31 @@ def _extract_quoted_title(text: str) -> str:
     if not match:
         return ""
     return str(match.group(1) or match.group(2) or "").strip()
+
+
+def _find_matching_source(retrieved_sources: list[dict], quoted_title: str) -> tuple[str, str] | None:
+    cleaned_title = quoted_title.strip().lower()
+    if cleaned_title:
+        for source in retrieved_sources:
+            filename = str(source.get("filename") or "").strip()
+            document_id = str(source.get("document_id") or "").strip()
+            stem = Path(filename).stem.replace("_", " ").replace("-", " ").strip().lower()
+            if stem == cleaned_title:
+                return (
+                    Path(filename).stem.replace("_", " ").replace("-", " ").strip(),
+                    document_id,
+                )
+
+    for source in retrieved_sources:
+        filename = str(source.get("filename") or "").strip()
+        document_id = str(source.get("document_id") or "").strip()
+        if filename or document_id:
+            return (
+                Path(filename).stem.replace("_", " ").replace("-", " ").strip(),
+                document_id,
+            )
+
+    return None
 
 
 class ConnectionManager:
@@ -234,7 +267,7 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
         safe_session_id,
         user_id=payload.user_id,
     )
-    active_document_hint = infer_active_document_hint(
+    active_document_hint, active_document_id = infer_active_document_context(
         safe_session_id,
         user_id=payload.user_id,
     )
@@ -246,6 +279,7 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
             conversation_history=conversation_history,
             llm_thread_history=llm_thread_history,
             active_document_hint=active_document_hint,
+            active_document_id=active_document_id,
             model=payload.model,
         )
     except OllamaServiceError as exc:
@@ -254,6 +288,7 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
     retrieved_chunks_payload = [
         {
             "chunk_id": chunk.chunk_id,
+            "document_id": chunk.document_id,
             "source_path": chunk.source_path,
             "filename": chunk.filename,
             "category": chunk.category,

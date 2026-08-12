@@ -28,6 +28,7 @@ THREE_PLUS_NEWLINES_PATTERN = re.compile(r"\n{3,}")
 class SourceDocument:
     """A normalized document loaded from the knowledge base."""
 
+    document_id: str
     source_path: str
     filename: str
     category: str
@@ -40,6 +41,7 @@ class KnowledgeChunk:
     """A chunk of document text ready for embedding."""
 
     chunk_id: str
+    document_id: str
     text: str
     embedding_text: str
     source_path: str
@@ -65,6 +67,7 @@ def load_documents(base_path: Path) -> list[SourceDocument]:
         category = _infer_category(base_path, path)
         documents.append(
             SourceDocument(
+                document_id=_build_document_id(base_path, path),
                 source_path=str(path),
                 filename=path.name,
                 category=category,
@@ -146,6 +149,7 @@ def _chunk_document(
             chunks.append(
                 KnowledgeChunk(
                     chunk_id=chunk_id,
+                    document_id=document.document_id,
                     text=chunk_text,
                     embedding_text=_build_embedding_text(
                         document=document,
@@ -242,6 +246,7 @@ def _build_embedding_text(
     filename_stem = Path(document.filename).stem.replace("_", " ").replace("-", " ")
     return (
         f"Document title: {filename_stem}\n"
+        f"Document id: {document.document_id}\n"
         f"Source file: {document.filename}\n"
         f"Category: {document.category}\n"
         f"Chunk id: {chunk_id}\n"
@@ -249,3 +254,9 @@ def _build_embedding_text(
         "Document content:\n"
         f"{chunk_text}"
     )
+
+
+def _build_document_id(base_path: Path, path: Path) -> str:
+    relative_path = path.relative_to(base_path)
+    stem = relative_path.with_suffix("")
+    return "::".join(stem.parts).lower()
