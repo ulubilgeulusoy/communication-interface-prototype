@@ -13,6 +13,8 @@ import httpx
 
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+DOCUMENT_EMBEDDING_PREFIX = "search_document: "
+QUERY_EMBEDDING_PREFIX = "search_query: "
 
 
 class EmbeddingServiceError(Exception):
@@ -61,6 +63,28 @@ class OllamaEmbeddingService:
         """Embed a single text string."""
 
         batch = await self.embed_texts([text], model=model)
+        return batch.items[0]
+
+    async def embed_document_text(
+        self,
+        text: str,
+        *,
+        model: str | None = None,
+    ) -> EmbeddingItem:
+        """Embed one retrieval document using Nomic's document prefix."""
+
+        batch = await self.embed_document_texts([text], model=model)
+        return batch.items[0]
+
+    async def embed_query_text(
+        self,
+        text: str,
+        *,
+        model: str | None = None,
+    ) -> EmbeddingItem:
+        """Embed one retrieval query using Nomic's query prefix."""
+
+        batch = await self.embed_query_texts([text], model=model)
         return batch.items[0]
 
     async def embed_texts(
@@ -119,9 +143,88 @@ class OllamaEmbeddingService:
 
         return EmbeddingBatch(model=selected_model, items=items)
 
+    async def embed_document_texts(
+        self,
+        texts: list[str],
+        *,
+        model: str | None = None,
+        truncate: bool = True,
+    ) -> EmbeddingBatch:
+        """Embed retrieval documents using Nomic's document-task prefix."""
+
+        return await self._embed_prefixed_texts(
+            texts=texts,
+            prefixer=self._prefix_document_text,
+            model=model,
+            truncate=truncate,
+        )
+
+    async def embed_query_texts(
+        self,
+        texts: list[str],
+        *,
+        model: str | None = None,
+        truncate: bool = True,
+    ) -> EmbeddingBatch:
+        """Embed retrieval queries using Nomic's query-task prefix."""
+
+        return await self._embed_prefixed_texts(
+            texts=texts,
+            prefixer=self._prefix_query_text,
+            model=model,
+            truncate=truncate,
+        )
+
+    async def _embed_prefixed_texts(
+        self,
+        *,
+        texts: list[str],
+        prefixer,
+        model: str | None,
+        truncate: bool,
+    ) -> EmbeddingBatch:
+        prefixed_texts = [prefixer(text) for text in texts]
+        try:
+            return await self.embed_texts(
+                prefixed_texts,
+                model=model,
+                truncate=truncate,
+            )
+        except EmbeddingServiceError as exc:
+            # Some local Ollama/model combinations may reject retrieval-task prefixes.
+            # Fall back to raw text so the app continues to function.
+            if not self._should_fallback_to_raw_text(exc):
+                raise
+            return await self.embed_texts(
+                texts,
+                model=model,
+                truncate=truncate,
+            )
+
     @staticmethod
     def _clean_text(text: str) -> str:
         return str(text).strip()
+
+    @classmethod
+    def _prefix_document_text(cls, text: str) -> str:
+        return f"{DOCUMENT_EMBEDDING_PREFIX}{cls._clean_text(text)}"
+
+    @classmethod
+    def _prefix_query_text(cls, text: str) -> str:
+        return f"{QUERY_EMBEDDING_PREFIX}{cls._clean_text(text)}"
+
+    @staticmethod
+    def _should_fallback_to_raw_text(exc: EmbeddingServiceError) -> bool:
+        message = str(exc).lower()
+        fallback_markers = (
+            "invalid",
+            "malformed",
+            "timed out",
+            "failed with status 4",
+            "failed with status 5",
+            "not found",
+        )
+        return any(marker in message for marker in fallback_markers)
 
     @staticmethod
     def _extract_error_detail(response: httpx.Response) -> str:

@@ -64,6 +64,12 @@ class LLMReply(BaseModel):
     retrieval_mode: str = "global"
     active_document_title: str = ""
     active_document_id: str = ""
+    retrieval_query: str = ""
+    retrieval_requested_top_k: int = 0
+    retrieval_raw_candidate_count: int = 0
+    retrieval_filtered_candidate_count: int = 0
+    retrieval_returned_chunk_count: int = 0
+    max_similarity_distance: float | None = None
 
 
 class SessionHistory(BaseModel):
@@ -566,6 +572,30 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
         retrieval_mode=current_state.retrieval_mode,
         active_document_title=current_state.active_document_title,
         active_document_id=current_state.active_document_id,
+        retrieval_query=(
+            rag_reply.retrieval_diagnostics.query if rag_reply.retrieval_diagnostics else ""
+        ),
+        retrieval_requested_top_k=(
+            rag_reply.retrieval_diagnostics.requested_top_k if rag_reply.retrieval_diagnostics else 0
+        ),
+        retrieval_raw_candidate_count=(
+            rag_reply.retrieval_diagnostics.raw_candidate_count if rag_reply.retrieval_diagnostics else 0
+        ),
+        retrieval_filtered_candidate_count=(
+            rag_reply.retrieval_diagnostics.filtered_candidate_count
+            if rag_reply.retrieval_diagnostics
+            else 0
+        ),
+        retrieval_returned_chunk_count=(
+            rag_reply.retrieval_diagnostics.returned_chunk_count
+            if rag_reply.retrieval_diagnostics
+            else 0
+        ),
+        max_similarity_distance=(
+            rag_reply.retrieval_diagnostics.max_similarity_distance
+            if rag_reply.retrieval_diagnostics
+            else None
+        ),
     )
 
 

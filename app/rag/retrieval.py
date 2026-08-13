@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import re
 
 import chromadb
 from chromadb.api.models.Collection import Collection
@@ -25,6 +26,9 @@ from .ingest import KnowledgeChunk
 DEFAULT_COLLECTION_NAME = "knowledge_chunks"
 DEFAULT_TOP_K = 5
 DEFAULT_VECTOR_STORE_PATH = Path(__file__).resolve().parent.parent.parent / "vector_store"
+DEFAULT_MAX_SIMILARITY_DISTANCE = 1.2
+DEFAULT_CANDIDATE_MULTIPLIER = 4
+TOKEN_PATTERN = re.compile(r"[a-z0-9]{2,}")
 
 
 class RetrievalServiceError(Exception):
@@ -56,6 +60,22 @@ class RetrievedChunk:
     collection_name: str
 
 
+@dataclass(frozen=True)
+class RetrievalDiagnostics:
+    query: str
+    requested_top_k: int
+    raw_candidate_count: int
+    filtered_candidate_count: int
+    returned_chunk_count: int
+    max_similarity_distance: float | None
+
+
+@dataclass(frozen=True)
+class RetrievalResult:
+    chunks: list[RetrievedChunk]
+    diagnostics: RetrievalDiagnostics
+
+
 class ChromaRetrievalStore:
     """Persistent ChromaDB wrapper for chunk indexing and search."""
 
@@ -84,16 +104,21 @@ class ChromaRetrievalStore:
 
         collection = self._get_collection(collection_name)
         indexed_chunks = self._pair_chunks_with_embeddings(chunks, embeddings)
+        indexed_by_document = self._group_indexed_chunks_by_document(indexed_chunks)
 
-        try:
-            collection.upsert(
-                ids=[item.chunk.chunk_id for item in indexed_chunks],
-                embeddings=[item.vector for item in indexed_chunks],
-                documents=[item.chunk.embedding_text for item in indexed_chunks],
-                metadatas=[self._metadata_for_chunk(item.chunk) for item in indexed_chunks],
-            )
-        except Exception as exc:  # pragma: no cover - Chroma raises library-specific errors
-            raise RetrievalServiceError("Failed to upsert chunks into ChromaDB.") from exc
+        for document_id, document_chunks in indexed_by_document.items():
+            try:
+                collection.delete(where={"document_id": document_id})
+                collection.upsert(
+                    ids=[item.chunk.chunk_id for item in document_chunks],
+                    embeddings=[item.vector for item in document_chunks],
+                    documents=[item.chunk.embedding_text for item in document_chunks],
+                    metadatas=[self._metadata_for_chunk(item.chunk) for item in document_chunks],
+                )
+            except Exception as exc:  # pragma: no cover - Chroma raises library-specific errors
+                raise RetrievalServiceError(
+                    f"Failed to refresh chunks in ChromaDB for document '{document_id}'."
+                ) from exc
 
     def search(
         self,
@@ -102,39 +127,62 @@ class ChromaRetrievalStore:
         query_embedding: EmbeddingItem,
         top_k: int = DEFAULT_TOP_K,
         neighbor_window: int = 1,
+        max_similarity_distance: float | None = DEFAULT_MAX_SIMILARITY_DISTANCE,
+        candidate_multiplier: int = DEFAULT_CANDIDATE_MULTIPLIER,
         document_id: str | None = None,
         collection_name: str | None = None,
-    ) -> list[RetrievedChunk]:
+    ) -> RetrievalResult:
         """Run similarity search against indexed chunks."""
 
         if top_k <= 0:
             raise RetrievalServiceError("top_k must be greater than 0.")
         if neighbor_window < 0:
             raise RetrievalServiceError("neighbor_window must be 0 or greater.")
+        if max_similarity_distance is not None and max_similarity_distance < 0:
+            raise RetrievalServiceError("max_similarity_distance must be 0 or greater.")
+        if candidate_multiplier <= 0:
+            raise RetrievalServiceError("candidate_multiplier must be greater than 0.")
 
         collection = self._get_collection(collection_name)
         try:
             results = collection.query(
                 query_embeddings=[query_embedding.vector],
-                n_results=top_k,
+                n_results=max(top_k, top_k * candidate_multiplier),
                 include=["documents", "metadatas", "distances"],
                 where=self._build_where_filter(document_id=document_id),
             )
         except Exception as exc:  # pragma: no cover - Chroma raises library-specific errors
             raise RetrievalServiceError("Failed to query ChromaDB.") from exc
 
-        retrieved = self._build_retrieved_chunks(
+        raw_candidates = self._build_retrieved_chunks(
             results=results,
             collection_name=collection.name,
         )
-        if not retrieved or neighbor_window == 0:
-            return retrieved
+        filtered_candidates = self._filter_by_similarity_distance(
+            raw_candidates,
+            max_similarity_distance=max_similarity_distance,
+        )
+        ranked_candidates = self._rerank_candidates(
+            filtered_candidates,
+            query=query,
+        )[:top_k]
+        diagnostics = RetrievalDiagnostics(
+            query=query,
+            requested_top_k=top_k,
+            raw_candidate_count=len(raw_candidates),
+            filtered_candidate_count=len(filtered_candidates),
+            returned_chunk_count=len(ranked_candidates),
+            max_similarity_distance=max_similarity_distance,
+        )
+        if not ranked_candidates or neighbor_window == 0:
+            return RetrievalResult(chunks=ranked_candidates, diagnostics=diagnostics)
 
-        return self._expand_with_neighbors(
+        expanded_chunks = self._expand_with_neighbors(
             collection=collection,
-            retrieved=retrieved,
+            retrieved=ranked_candidates,
             neighbor_window=neighbor_window,
         )
+        return RetrievalResult(chunks=expanded_chunks, diagnostics=diagnostics)
 
     def _get_collection(self, collection_name: str | None = None) -> Collection:
         name = collection_name or self.collection_name
@@ -149,6 +197,15 @@ class ChromaRetrievalStore:
         for chunk, embedding in zip(chunks, embeddings.items, strict=True):
             paired.append(IndexedChunk(chunk=chunk, vector=embedding.vector))
         return paired
+
+    @staticmethod
+    def _group_indexed_chunks_by_document(
+        indexed_chunks: list[IndexedChunk],
+    ) -> dict[str, list[IndexedChunk]]:
+        grouped: dict[str, list[IndexedChunk]] = {}
+        for item in indexed_chunks:
+            grouped.setdefault(item.chunk.document_id, []).append(item)
+        return grouped
 
     @staticmethod
     def _metadata_for_chunk(chunk: KnowledgeChunk) -> dict[str, Any]:
@@ -187,6 +244,56 @@ class ChromaRetrievalStore:
 
         ordered.sort(key=lambda item: (item.source_path, item.chunk_index, item.chunk_id))
         return ordered
+
+    @staticmethod
+    def _filter_by_similarity_distance(
+        retrieved: list[RetrievedChunk],
+        *,
+        max_similarity_distance: float | None,
+    ) -> list[RetrievedChunk]:
+        if max_similarity_distance is None:
+            return retrieved
+
+        filtered: list[RetrievedChunk] = []
+        for chunk in retrieved:
+            distance = chunk.similarity_distance
+            if distance is None:
+                continue
+            if distance <= max_similarity_distance:
+                filtered.append(chunk)
+        return filtered
+
+    @staticmethod
+    def _rerank_candidates(
+        retrieved: list[RetrievedChunk],
+        *,
+        query: str,
+    ) -> list[RetrievedChunk]:
+        query_tokens = _tokenize(query)
+        if not query_tokens:
+            return sorted(
+                retrieved,
+                key=lambda chunk: (
+                    chunk.similarity_distance if chunk.similarity_distance is not None else float("inf")
+                ),
+            )
+
+        def ranking_key(chunk: RetrievedChunk) -> tuple[float, float, int]:
+            lexical_score = _lexical_overlap_score(
+                query_tokens,
+                " ".join(
+                    [
+                        chunk.filename,
+                        chunk.category,
+                        chunk.text,
+                    ]
+                ),
+            )
+            distance = chunk.similarity_distance if chunk.similarity_distance is not None else float("inf")
+            step_match = 1 if re.search(r"(?i)\bstep\s+\d+\b", chunk.text) else 0
+            return (-lexical_score, distance, -step_match)
+
+        return sorted(retrieved, key=ranking_key)
 
     def _fetch_neighbors(
         self,
@@ -293,10 +400,12 @@ def search_chunks(
     query_embedding: EmbeddingItem,
     top_k: int = DEFAULT_TOP_K,
     neighbor_window: int = 1,
+    max_similarity_distance: float | None = DEFAULT_MAX_SIMILARITY_DISTANCE,
+    candidate_multiplier: int = DEFAULT_CANDIDATE_MULTIPLIER,
     document_id: str | None = None,
     store_path: Path = DEFAULT_VECTOR_STORE_PATH,
     collection_name: str = DEFAULT_COLLECTION_NAME,
-) -> list[RetrievedChunk]:
+) -> RetrievalResult:
     """Convenience wrapper for similarity search."""
 
     store = ChromaRetrievalStore(
@@ -308,6 +417,8 @@ def search_chunks(
         query_embedding=query_embedding,
         top_k=top_k,
         neighbor_window=neighbor_window,
+        max_similarity_distance=max_similarity_distance,
+        candidate_multiplier=candidate_multiplier,
         document_id=document_id,
     )
 
@@ -322,3 +433,16 @@ def _normalize_result_rows(value: Any) -> list[list[Any]]:
     if isinstance(value[0], list):
         return value
     return [value]
+
+
+def _tokenize(text: str) -> set[str]:
+    return {match.group(0) for match in TOKEN_PATTERN.finditer(str(text).lower())}
+
+
+def _lexical_overlap_score(query_tokens: set[str], text: str) -> float:
+    if not query_tokens:
+        return 0.0
+    chunk_tokens = _tokenize(text)
+    if not chunk_tokens:
+        return 0.0
+    return len(query_tokens & chunk_tokens) / len(query_tokens)

@@ -43,7 +43,9 @@ async def run_indexing(
         return 0
 
     embedding_service = OllamaEmbeddingService(model=embedding_model)
-    embeddings = await embedding_service.embed_texts([chunk.text for chunk in chunks])
+    embeddings = await embedding_service.embed_document_texts(
+        [chunk.embedding_text for chunk in chunks]
+    )
     upsert_document_chunks(
         chunks,
         embeddings,

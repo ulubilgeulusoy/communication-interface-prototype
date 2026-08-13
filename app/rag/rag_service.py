@@ -23,8 +23,12 @@ from .embeddings import (
     OllamaEmbeddingService,
 )
 from .retrieval import (
+    DEFAULT_CANDIDATE_MULTIPLIER,
     DEFAULT_COLLECTION_NAME,
+    DEFAULT_MAX_SIMILARITY_DISTANCE,
     DEFAULT_TOP_K,
+    RetrievalDiagnostics,
+    RetrievalResult,
     DEFAULT_VECTOR_STORE_PATH,
     RetrievedChunk,
     RetrievalServiceError,
@@ -64,6 +68,7 @@ class RAGReply:
     retrieved_chunks: list[RetrievedChunk]
     augmented_message: str
     used_retrieval: bool
+    retrieval_diagnostics: RetrievalDiagnostics | None = None
 
 
 class RAGService:
@@ -77,6 +82,8 @@ class RAGService:
         collection_name: str = DEFAULT_COLLECTION_NAME,
         top_k: int = 7,
         neighbor_window: int = 1,
+        max_similarity_distance: float | None = DEFAULT_MAX_SIMILARITY_DISTANCE,
+        candidate_multiplier: int = DEFAULT_CANDIDATE_MULTIPLIER,
         vector_store_path: Path = DEFAULT_VECTOR_STORE_PATH,
         rag_instructions: str = DEFAULT_RAG_INSTRUCTIONS,
     ) -> None:
@@ -87,6 +94,8 @@ class RAGService:
         self.collection_name = collection_name
         self.top_k = top_k
         self.neighbor_window = neighbor_window
+        self.max_similarity_distance = max_similarity_distance
+        self.candidate_multiplier = candidate_multiplier
         self.vector_store_path = Path(vector_store_path)
         self.rag_instructions = rag_instructions
 
@@ -123,6 +132,7 @@ class RAGService:
                 retrieved_chunks=[],
                 augmented_message=cleaned_message,
                 used_retrieval=False,
+                retrieval_diagnostics=None,
             )
 
         retrieval_message = self._rewrite_follow_up_query(
@@ -131,16 +141,19 @@ class RAGService:
         )
 
         try:
-            query_embedding = await self.embedding_service.embed_text(retrieval_message)
-            retrieved_chunks = search_chunks(
+            query_embedding = await self.embedding_service.embed_query_text(retrieval_message)
+            retrieval_result = search_chunks(
                 query=retrieval_message,
                 query_embedding=query_embedding,
                 top_k=top_k or self.top_k,
                 neighbor_window=self.neighbor_window,
+                max_similarity_distance=self.max_similarity_distance,
+                candidate_multiplier=self.candidate_multiplier,
                 document_id=active_document_id or None,
                 store_path=self.vector_store_path,
                 collection_name=self.collection_name,
             )
+            retrieved_chunks = retrieval_result.chunks
         except (EmbeddingServiceError, RetrievalServiceError) as exc:
             llm_response = await self.llm_service.generate_reply(
                 message_text=cleaned_message,
@@ -154,6 +167,7 @@ class RAGService:
                 retrieved_chunks=[],
                 augmented_message=retrieval_message,
                 used_retrieval=False,
+                retrieval_diagnostics=None,
             )
 
         if not retrieved_chunks:
@@ -169,6 +183,7 @@ class RAGService:
                 retrieved_chunks=[],
                 augmented_message=retrieval_message,
                 used_retrieval=False,
+                retrieval_diagnostics=retrieval_result.diagnostics,
             )
 
         augmented_message = self._build_augmented_message(
@@ -190,6 +205,7 @@ class RAGService:
             retrieved_chunks=retrieved_chunks,
             augmented_message=augmented_message,
             used_retrieval=True,
+            retrieval_diagnostics=retrieval_result.diagnostics,
         )
 
     def _build_augmented_message(
