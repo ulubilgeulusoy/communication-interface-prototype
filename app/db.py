@@ -9,6 +9,7 @@ from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SESSIONS_DIR = BASE_DIR / "sessions"
+SESSION_MEDIA_DIR = BASE_DIR / "session_media"
 SESSION_ID_PATTERN = re.compile(r"[^A-Za-z0-9_-]+")
 
 
@@ -27,6 +28,13 @@ def get_db_path(session_id: str) -> Path:
 
 def ensure_sessions_dir() -> None:
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def ensure_session_audio_dir(session_id: str) -> Path:
+    SESSION_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    session_audio_dir = SESSION_MEDIA_DIR / sanitize_session_id(session_id) / "audio"
+    session_audio_dir.mkdir(parents=True, exist_ok=True)
+    return session_audio_dir
 
 
 def get_connection(session_id: str) -> sqlite3.Connection:
@@ -49,6 +57,9 @@ def init_db(session_id: str | None = None) -> None:
                 sender TEXT NOT NULL,
                 receiver TEXT NOT NULL,
                 content TEXT NOT NULL,
+                audio_path TEXT,
+                audio_mime_type TEXT,
+                audio_original_filename TEXT,
                 sent_timestamp TEXT NOT NULL,
                 delivered_timestamp TEXT,
                 session_id TEXT NOT NULL,
@@ -65,10 +76,49 @@ def init_db(session_id: str | None = None) -> None:
                 user_id TEXT NOT NULL,
                 model TEXT NOT NULL,
                 input_text TEXT NOT NULL,
+                input_audio_path TEXT,
+                input_audio_mime_type TEXT,
+                input_audio_original_filename TEXT,
                 output_text TEXT NOT NULL,
                 retrieved_sources_json TEXT
             )
             """
+        )
+        _ensure_column(
+            conn,
+            table_name="messages",
+            column_name="audio_path",
+            column_definition="TEXT",
+        )
+        _ensure_column(
+            conn,
+            table_name="messages",
+            column_name="audio_mime_type",
+            column_definition="TEXT",
+        )
+        _ensure_column(
+            conn,
+            table_name="messages",
+            column_name="audio_original_filename",
+            column_definition="TEXT",
+        )
+        _ensure_column(
+            conn,
+            table_name="llm_interactions",
+            column_name="input_audio_path",
+            column_definition="TEXT",
+        )
+        _ensure_column(
+            conn,
+            table_name="llm_interactions",
+            column_name="input_audio_mime_type",
+            column_definition="TEXT",
+        )
+        _ensure_column(
+            conn,
+            table_name="llm_interactions",
+            column_name="input_audio_original_filename",
+            column_definition="TEXT",
         )
         _ensure_column(
             conn,
@@ -87,6 +137,9 @@ def log_message(
     sender: str,
     receiver: str,
     content: str,
+    audio_path: str | None = None,
+    audio_mime_type: str | None = None,
+    audio_original_filename: str | None = None,
     sent_timestamp: str,
     session_id: str,
     experimental_condition: str,
@@ -99,16 +152,22 @@ def log_message(
                 sender,
                 receiver,
                 content,
+                audio_path,
+                audio_mime_type,
+                audio_original_filename,
                 sent_timestamp,
                 session_id,
                 experimental_condition
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sender,
                 receiver,
                 content,
+                audio_path,
+                audio_mime_type,
+                audio_original_filename,
                 sent_timestamp,
                 session_id,
                 experimental_condition,
@@ -155,6 +214,9 @@ def log_llm_interaction(
     user_id: str,
     model: str,
     input_text: str,
+    input_audio_path: str | None = None,
+    input_audio_mime_type: str | None = None,
+    input_audio_original_filename: str | None = None,
     output_text: str,
     retrieved_sources_json: str | None = None,
 ) -> int:
@@ -168,10 +230,13 @@ def log_llm_interaction(
                 user_id,
                 model,
                 input_text,
+                input_audio_path,
+                input_audio_mime_type,
+                input_audio_original_filename,
                 output_text,
                 retrieved_sources_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 timestamp,
@@ -179,6 +244,9 @@ def log_llm_interaction(
                 user_id,
                 model,
                 input_text,
+                input_audio_path,
+                input_audio_mime_type,
+                input_audio_original_filename,
                 output_text,
                 retrieved_sources_json,
             ),

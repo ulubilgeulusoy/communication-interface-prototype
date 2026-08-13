@@ -28,6 +28,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html {
   background:
     radial-gradient(circle at top left, rgba(230, 164, 117, 0.22), transparent 25%),
@@ -497,8 +501,119 @@ h2 {
   padding: 0.75rem 0.9rem;
 }
 
+.composer-main {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
 .composer-textarea {
   min-height: 84px;
+}
+
+.voice-tools {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.voice-status {
+  color: var(--muted);
+  font-size: 0.82rem;
+  min-height: 1.1rem;
+}
+
+.voice-status-modal {
+  margin: 0;
+}
+
+.audio-preview {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px dashed rgba(63, 54, 45, 0.16);
+  border-radius: 14px;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.7rem 0.8rem;
+}
+
+.audio-preview-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.modal-backdrop {
+  background: rgba(22, 18, 13, 0.42);
+  inset: 0;
+  position: fixed;
+  z-index: 40;
+}
+
+.voice-modal {
+  background: rgba(255, 250, 243, 0.98);
+  border: 1px solid rgba(63, 54, 45, 0.12);
+  border-radius: 24px;
+  box-shadow: 0 32px 80px rgba(38, 28, 19, 0.26);
+  display: grid;
+  gap: 1rem;
+  left: 50%;
+  max-width: min(720px, calc(100vw - 2rem));
+  padding: 1rem;
+  position: fixed;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%;
+  z-index: 41;
+}
+
+.voice-modal-header,
+.voice-modal-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.8rem;
+  justify-content: space-between;
+}
+
+.voice-modal-body {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.voice-indicators {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.voice-tools-modal {
+  justify-content: flex-start;
+}
+
+.voice-transcript-field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.voice-transcript-textarea {
+  min-height: 180px;
+}
+
+.message-audio {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+}
+
+.message-audio-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.message-audio-player,
+.audio-preview audio {
+  width: 100%;
 }
 
 .context-menu {

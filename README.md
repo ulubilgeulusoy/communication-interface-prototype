@@ -130,7 +130,7 @@ If `ollama serve` returns `bind: address already in use`, treat that as "Ollama 
 7. Start the FastAPI app from the repo root:
 
 ```powershell
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+python run_app.py
 ```
 
 In either PowerShell or Ubuntu/Linux terminal, a healthy startup usually includes lines like:
@@ -139,6 +139,8 @@ In either PowerShell or Ubuntu/Linux terminal, a healthy startup usually include
 Uvicorn running on http://127.0.0.1:8000
 Application startup complete.
 ```
+
+`run_app.py` automatically prefers the repo-local faster-whisper model at `models/faster-whisper/base` when it exists, and it configures speech transcription to run on CPU by default so you do not need to export those settings manually before startup.
 
 8. Check that the app is responding locally:
 

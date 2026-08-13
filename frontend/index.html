@@ -61,11 +61,18 @@
                 <option value="user_a">User A</option>
               </select>
             </label>
-            <textarea
-              id="message-content"
-              class="composer-textarea"
-              placeholder="Type a message for the other user"
-            ></textarea>
+            <div class="composer-main">
+              <textarea
+                id="message-content"
+                class="composer-textarea"
+                placeholder="Type a message for the other user"
+              ></textarea>
+              <div class="voice-tools">
+                <button type="button" id="record-user-audio" class="ghost-button">Record Voice</button>
+                <button type="button" id="clear-user-audio" class="ghost-button ghost-button-subtle">Clear Voice</button>
+              </div>
+              <div id="user-audio-preview" class="audio-preview" hidden></div>
+            </div>
             <button type="submit">Send to User</button>
           </form>
         </section>
@@ -99,11 +106,18 @@
               <span class="compact-label-title">Model</span>
               <span class="composer-model">Local Ollama</span>
             </div>
-            <textarea
-              id="llm-content"
-              class="composer-textarea"
-              placeholder="Type a message for the LLM"
-            ></textarea>
+            <div class="composer-main">
+              <textarea
+                id="llm-content"
+                class="composer-textarea"
+                placeholder="Type a message for the LLM"
+              ></textarea>
+              <div class="voice-tools">
+                <button type="button" id="record-llm-audio" class="ghost-button">Record Voice</button>
+                <button type="button" id="clear-llm-audio" class="ghost-button ghost-button-subtle">Clear Voice</button>
+              </div>
+              <div id="llm-audio-preview" class="audio-preview" hidden></div>
+            </div>
             <button type="submit" id="ask-llm-button" class="secondary-button">Send to LLM</button>
           </form>
         </section>
@@ -116,6 +130,40 @@
       <button type="button" data-action="send-llm">Send to LLM Chat</button>
       <button type="button" data-action="clear-selection">Clear Selection</button>
     </div>
+
+    <div id="voice-modal-backdrop" class="modal-backdrop" hidden></div>
+    <section id="voice-modal" class="voice-modal" hidden aria-labelledby="voice-modal-title" aria-modal="true" role="dialog">
+      <div class="voice-modal-header">
+        <div>
+          <p class="eyebrow">Voice Draft</p>
+          <h2 id="voice-modal-title">Record a voice message</h2>
+        </div>
+        <button type="button" id="close-voice-modal" class="ghost-button ghost-button-subtle">Close</button>
+      </div>
+      <div class="voice-modal-body">
+        <div class="voice-indicators">
+          <span id="voice-mic-status" class="context-chip context-chip-muted">Mic: checking…</span>
+          <span id="voice-recording-status" class="context-chip context-chip-muted">Idle</span>
+        </div>
+        <div class="voice-tools voice-tools-modal">
+          <button type="button" id="voice-modal-record-button">Start Recording</button>
+          <button type="button" id="voice-modal-clear-button" class="ghost-button ghost-button-subtle">Discard Draft</button>
+        </div>
+        <label class="voice-transcript-field">
+          Detected speech
+          <textarea
+            id="voice-transcript-text"
+            class="composer-textarea voice-transcript-textarea"
+            placeholder="Your transcript will appear here after recording."
+          ></textarea>
+        </label>
+        <div id="voice-modal-preview" class="audio-preview" hidden></div>
+        <p id="voice-modal-status" class="voice-status voice-status-modal"></p>
+      </div>
+      <div class="voice-modal-actions">
+        <button type="button" id="voice-modal-add-button" class="secondary-button">Add to Message</button>
+      </div>
+    </section>
 
     <script src="/static/app.js"></script>
   </body>

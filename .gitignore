@@ -52,3 +52,13 @@ knowledge_base/**
 vector_store/**
 !vector_store/
 !vector_store/.gitkeep
+
+# Local speech-to-text models and recorded media
+models/**
+!models/
+!models/**/
+!models/**/.gitkeep
+session_media/**
+!session_media/
+!session_media/**/
+!session_media/**/.gitkeep

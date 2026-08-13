@@ -5,13 +5,15 @@ from functools import lru_cache
 from pathlib import Path
 import re
 from dataclasses import dataclass
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .db import (
+    ensure_session_audio_dir,
     init_db,
     list_llm_interactions,
     list_messages,
@@ -33,17 +35,29 @@ from .rag.index_knowledge import (
 from .rag.ingest import load_documents
 from .rag.rag_service import RAGService
 from .rag.retrieval import DEFAULT_COLLECTION_NAME, DEFAULT_VECTOR_STORE_PATH, RetrievalServiceError
+from .stt_service import FasterWhisperService, SpeechToTextServiceError
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "frontend"
+SESSION_MEDIA_DIR = BASE_DIR / "session_media"
+SESSION_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Two-User Communication Prototype")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/session-media", StaticFiles(directory=SESSION_MEDIA_DIR), name="session-media")
 ollama_service = OllamaService()
 rag_service = RAGService(ollama_service)
+stt_service = FasterWhisperService()
 LLM_HISTORY_LIMIT = 12
 LLM_THREAD_HISTORY_LIMIT = 4
+
+
+class AudioAttachment(BaseModel):
+    audio_url: str = ""
+    audio_path: str = ""
+    audio_mime_type: str = ""
+    audio_original_filename: str = ""
 
 
 class LLMRequest(BaseModel):
@@ -51,6 +65,10 @@ class LLMRequest(BaseModel):
     user_id: str = Field(min_length=1)
     message_text: str = Field(min_length=1)
     model: str | None = None
+    audio_url: str = ""
+    audio_path: str = ""
+    audio_mime_type: str = ""
+    audio_original_filename: str = ""
 
 
 class LLMReply(BaseModel):
@@ -70,6 +88,7 @@ class LLMReply(BaseModel):
     retrieval_filtered_candidate_count: int = 0
     retrieval_returned_chunk_count: int = 0
     max_similarity_distance: float | None = None
+    audio: AudioAttachment = Field(default_factory=AudioAttachment)
 
 
 class SessionHistory(BaseModel):
@@ -92,6 +111,12 @@ class LLMContextReply(BaseModel):
     retrieval_mode: str
     active_document_title: str
     active_document_id: str
+
+
+class TranscriptionReply(BaseModel):
+    transcript: str
+    language: str
+    audio: AudioAttachment
 
 
 QUOTED_TITLE_PATTERN = re.compile(r'"([^"]{3,})"|\'([^\']{3,})\'')
@@ -195,6 +220,28 @@ def build_llm_thread_history(
             lines.append(f"LLM to user: {reply_text}")
 
     return "\n".join(lines)
+
+
+def build_audio_attachment(
+    *,
+    audio_path: str | None,
+    audio_mime_type: str | None,
+    audio_original_filename: str | None,
+) -> AudioAttachment:
+    cleaned_path = str(audio_path or "").strip()
+    return AudioAttachment(
+        audio_url=_audio_url_from_storage_path(cleaned_path),
+        audio_path=cleaned_path,
+        audio_mime_type=str(audio_mime_type or "").strip(),
+        audio_original_filename=str(audio_original_filename or "").strip(),
+    )
+
+
+def _audio_url_from_storage_path(audio_path: str) -> str:
+    if not audio_path:
+        return ""
+    relative_path = audio_path.replace("\\", "/").lstrip("/")
+    return f"/session-media/{relative_path}"
 
 
 def infer_active_document_context(
@@ -460,6 +507,44 @@ def clear_llm_context(payload: LLMRequest) -> LLMContextReply:
     )
 
 
+@app.post("/api/stt/transcribe", response_model=TranscriptionReply)
+async def transcribe_audio(
+    session_id: str = Form(...),
+    user_id: str = Form(...),
+    thread: str = Form(...),
+    audio_file: UploadFile = File(...),
+) -> TranscriptionReply:
+    safe_session_id = sanitize_session_id(session_id)
+    safe_user_id = sanitize_session_id(user_id)
+    safe_thread = sanitize_session_id(thread)
+    audio_dir = ensure_session_audio_dir(safe_session_id)
+    suffix = Path(audio_file.filename or "recording.webm").suffix or ".webm"
+    storage_name = f"{safe_user_id}-{safe_thread}-{uuid4().hex}{suffix}"
+    storage_path = audio_dir / storage_name
+
+    try:
+        file_bytes = await audio_file.read()
+        storage_path.write_bytes(file_bytes)
+        transcript = stt_service.transcribe_file(storage_path)
+    except SpeechToTextServiceError as exc:
+        storage_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OSError as exc:
+        storage_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Unable to store the recorded audio.") from exc
+
+    relative_path = str(storage_path.relative_to(SESSION_MEDIA_DIR)).replace("\\", "/")
+    return TranscriptionReply(
+        transcript=transcript.text,
+        language=transcript.language,
+        audio=build_audio_attachment(
+            audio_path=relative_path,
+            audio_mime_type=audio_file.content_type or "audio/webm",
+            audio_original_filename=audio_file.filename or storage_name,
+        ),
+    )
+
+
 @app.post("/api/llm/message", response_model=LLMReply)
 async def ask_llm(payload: LLMRequest) -> LLMReply:
     safe_session_id = sanitize_session_id(payload.session_id)
@@ -534,6 +619,9 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
         user_id=payload.user_id,
         model=rag_reply.llm_response.model or payload.model or DEFAULT_MODEL,
         input_text=payload.message_text,
+        input_audio_path=payload.audio_path or None,
+        input_audio_mime_type=payload.audio_mime_type or None,
+        input_audio_original_filename=payload.audio_original_filename or None,
         output_text=rag_reply.llm_response.output_text,
         retrieved_sources_json=json.dumps(retrieved_chunks_payload),
     )
@@ -596,6 +684,11 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
             if rag_reply.retrieval_diagnostics
             else None
         ),
+        audio=build_audio_attachment(
+            audio_path=payload.audio_path,
+            audio_mime_type=payload.audio_mime_type,
+            audio_original_filename=payload.audio_original_filename,
+        ),
     )
 
 
@@ -634,6 +727,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
             receiver = str(data["receiver"])
             content = str(data["content"])
             session_id = sanitize_session_id(str(data["session_id"]))
+            audio_path = str(data.get("audio_path") or "").strip()
+            audio_mime_type = str(data.get("audio_mime_type") or "").strip()
+            audio_original_filename = str(data.get("audio_original_filename") or "").strip()
             experimental_condition = str(
                 data.get("experimental_condition") or assign_condition(session_id)
             )
@@ -643,6 +739,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
                 sender=user_id,
                 receiver=receiver,
                 content=content,
+                audio_path=audio_path or None,
+                audio_mime_type=audio_mime_type or None,
+                audio_original_filename=audio_original_filename or None,
                 sent_timestamp=sent_timestamp,
                 session_id=session_id,
                 experimental_condition=experimental_condition,
@@ -653,6 +752,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
                 "sender": user_id,
                 "receiver": receiver,
                 "content": content,
+                "audio": build_audio_attachment(
+                    audio_path=audio_path,
+                    audio_mime_type=audio_mime_type,
+                    audio_original_filename=audio_original_filename,
+                ).model_dump(),
                 "sent_timestamp": sent_timestamp,
                 "delivered_timestamp": None,
                 "session_id": session_id,

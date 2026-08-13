@@ -6,6 +6,23 @@ const receiverInput = document.querySelector("#receiver-id");
 const sessionInput = document.querySelector("#session-id");
 const contentInput = document.querySelector("#message-content");
 const llmContentInput = document.querySelector("#llm-content");
+const userAudioPreviewEl = document.querySelector("#user-audio-preview");
+const llmAudioPreviewEl = document.querySelector("#llm-audio-preview");
+const recordUserAudioButton = document.querySelector("#record-user-audio");
+const clearUserAudioButton = document.querySelector("#clear-user-audio");
+const recordLlmAudioButton = document.querySelector("#record-llm-audio");
+const clearLlmAudioButton = document.querySelector("#clear-llm-audio");
+const voiceModalEl = document.querySelector("#voice-modal");
+const voiceModalBackdropEl = document.querySelector("#voice-modal-backdrop");
+const closeVoiceModalButton = document.querySelector("#close-voice-modal");
+const voiceMicStatusEl = document.querySelector("#voice-mic-status");
+const voiceRecordingStatusEl = document.querySelector("#voice-recording-status");
+const voiceModalRecordButton = document.querySelector("#voice-modal-record-button");
+const voiceModalClearButton = document.querySelector("#voice-modal-clear-button");
+const voiceTranscriptTextEl = document.querySelector("#voice-transcript-text");
+const voiceModalPreviewEl = document.querySelector("#voice-modal-preview");
+const voiceModalStatusEl = document.querySelector("#voice-modal-status");
+const voiceModalAddButton = document.querySelector("#voice-modal-add-button");
 const statusLabel = document.querySelector("#connection-status");
 const conditionLabel = document.querySelector("#condition-label");
 const userMessagesEl = document.querySelector("#user-messages");
@@ -34,6 +51,16 @@ let currentLlmContext = {
   activeDocumentTitle: "",
   activeDocumentId: "",
 };
+const audioDrafts = {
+  user: createEmptyAudioDraft(),
+  llm: createEmptyAudioDraft(),
+};
+let mediaRecorder = null;
+let activeRecordingThread = null;
+let recordingChunks = [];
+let recordingStream = null;
+let activeVoiceModalThread = null;
+let modalDraftTranscript = "";
 
 hideContextMenu();
 userMessagesEl.dataset.empty = "No user messages yet.";
@@ -42,10 +69,20 @@ syncEmptyState(userMessagesEl, userThread);
 syncEmptyState(llmMessagesEl, llmThread);
 syncSelectionStatus();
 syncLlmContextDisplay();
+updateRecordingButtons();
 
 function buildClientMessageId(prefix) {
   messageCounter += 1;
   return `${prefix}-${Date.now()}-${messageCounter}`;
+}
+
+function createEmptyAudioDraft() {
+  return {
+    audioUrl: "",
+    audioPath: "",
+    audioMimeType: "",
+    audioOriginalFilename: "",
+  };
 }
 
 function syncEmptyState(container, messages) {
@@ -127,6 +164,15 @@ function normalizeMessageText(text) {
   return String(text || "").trim();
 }
 
+function normalizeAudioAttachment(audio) {
+  return {
+    audioUrl: audio?.audioUrl || audio?.audio_url || "",
+    audioPath: audio?.audioPath || audio?.audio_path || "",
+    audioMimeType: audio?.audioMimeType || audio?.audio_mime_type || "",
+    audioOriginalFilename: audio?.audioOriginalFilename || audio?.audio_original_filename || "",
+  };
+}
+
 function joinMessagesForForward(messages) {
   return messages
     .map((message) => normalizeMessageText(message.body))
@@ -190,14 +236,42 @@ function appendMessageToThread(message) {
 }
 
 function buildMessageBody(message) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "message-body-stack";
+
+  let body;
   if (message.thread === "llm" && message.role === "assistant") {
-    return renderRichMessageBody(message.body);
+    body = renderRichMessageBody(message.body);
+  } else {
+    body = document.createElement("p");
+    body.className = "message-body message-body-plain";
+    body.textContent = message.body;
+  }
+  wrapper.append(body);
+
+  const audio = normalizeAudioAttachment(message.audio);
+  if (audio.audioUrl) {
+    wrapper.append(buildAudioAttachmentElement(audio));
   }
 
-  const body = document.createElement("p");
-  body.className = "message-body message-body-plain";
-  body.textContent = message.body;
-  return body;
+  return wrapper;
+}
+
+function buildAudioAttachmentElement(audio) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "message-audio";
+
+  const label = document.createElement("span");
+  label.className = "message-audio-label";
+  label.textContent = audio.audioOriginalFilename || "Voice attachment";
+
+  const player = document.createElement("audio");
+  player.className = "message-audio-player";
+  player.controls = true;
+  player.src = audio.audioUrl;
+
+  wrapper.append(label, player);
+  return wrapper;
 }
 
 function renderRichMessageBody(text) {
@@ -487,6 +561,7 @@ function appendUserThreadMessage(payload, direction) {
     sender: payload.sender,
     receiver: payload.receiver,
     body: normalizeMessageText(payload.content),
+    audio: normalizeAudioAttachment(payload.audio || payload),
     timestamp: payload.sent_timestamp,
     deliveredTimestamp: payload.delivered_timestamp ?? null,
     receivedTimestamp: direction === "incoming" ? new Date().toISOString() : null,
@@ -502,13 +577,14 @@ function appendHistoricalUserMessage(message) {
     sender: message.sender,
     receiver: message.receiver,
     body: normalizeMessageText(message.content),
+    audio: normalizeAudioAttachment(message),
     timestamp: message.sent_timestamp,
     deliveredTimestamp: message.delivered_timestamp ?? null,
     receivedTimestamp: isOutgoing ? null : message.delivered_timestamp ?? message.sent_timestamp,
   });
 }
 
-function appendLlmPromptMessage(text) {
+function appendLlmPromptMessage(text, audio = createEmptyAudioDraft()) {
   appendMessageToThread({
     id: buildClientMessageId("llm-user"),
     thread: "llm",
@@ -517,6 +593,7 @@ function appendLlmPromptMessage(text) {
     sender: userInput.value,
     receiver: "llm",
     body: normalizeMessageText(text),
+    audio: normalizeAudioAttachment(audio),
     timestamp: new Date().toISOString(),
     sessionId: sessionInput.value.trim(),
     model: "prompt",
@@ -547,6 +624,11 @@ function appendHistoricalLlmInteraction(interaction) {
     sender: interaction.user_id,
     receiver: "llm",
     body: normalizeMessageText(interaction.input_text),
+    audio: normalizeAudioAttachment({
+      audio_path: interaction.input_audio_path,
+      audio_mime_type: interaction.input_audio_mime_type,
+      audio_original_filename: interaction.input_audio_original_filename,
+    }),
     timestamp: interaction.timestamp,
     sessionId: interaction.session_id,
     model: "prompt",
@@ -564,6 +646,285 @@ function appendHistoricalLlmInteraction(interaction) {
     sessionId: interaction.session_id,
     model: interaction.model,
   });
+}
+
+function getAudioDraft(thread) {
+  return audioDrafts[thread];
+}
+
+function setAudioStatus(thread, text) {
+  if (activeVoiceModalThread === thread) {
+    voiceModalStatusEl.textContent = text;
+  }
+}
+
+function getAudioPreviewElement(thread) {
+  return thread === "user" ? userAudioPreviewEl : llmAudioPreviewEl;
+}
+
+function renderAudioDraft(thread) {
+  const previewEl = getAudioPreviewElement(thread);
+  const draft = getAudioDraft(thread);
+  previewEl.innerHTML = "";
+
+  if (!draft.audioUrl) {
+    previewEl.hidden = true;
+    return;
+  }
+
+  const label = document.createElement("span");
+  label.className = "audio-preview-label";
+  label.textContent = draft.audioOriginalFilename || "Voice attachment ready";
+
+  const player = document.createElement("audio");
+  player.controls = true;
+  player.src = draft.audioUrl;
+
+  previewEl.append(label, player);
+  previewEl.hidden = false;
+}
+
+function clearAudioDraft(thread, { clearStatus = true } = {}) {
+  audioDrafts[thread] = createEmptyAudioDraft();
+  renderAudioDraft(thread);
+  if (clearStatus) {
+    setAudioStatus(thread, "");
+  }
+}
+
+function openVoiceModal(thread) {
+  activeVoiceModalThread = thread;
+  modalDraftTranscript = thread === "user" ? normalizeMessageText(contentInput.value) : normalizeMessageText(llmContentInput.value);
+  voiceTranscriptTextEl.value = modalDraftTranscript;
+  voiceModalStatusEl.textContent = "";
+  syncVoiceModalPreview();
+  voiceModalBackdropEl.hidden = false;
+  voiceModalEl.hidden = false;
+  updateRecordingButtons();
+  updateVoiceModalIndicators("Checking microphone...");
+  checkMicrophoneAvailability();
+}
+
+function closeVoiceModal() {
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    mediaRecorder.stop();
+  }
+  activeVoiceModalThread = null;
+  modalDraftTranscript = "";
+  voiceModalBackdropEl.hidden = true;
+  voiceModalEl.hidden = true;
+  voiceModalStatusEl.textContent = "";
+}
+
+function syncVoiceModalPreview() {
+  if (!activeVoiceModalThread) {
+    voiceModalPreviewEl.hidden = true;
+    voiceModalPreviewEl.innerHTML = "";
+    return;
+  }
+
+  const draft = getAudioDraft(activeVoiceModalThread);
+  voiceModalPreviewEl.innerHTML = "";
+  if (!draft.audioUrl) {
+    voiceModalPreviewEl.hidden = true;
+    return;
+  }
+
+  const label = document.createElement("span");
+  label.className = "audio-preview-label";
+  label.textContent = draft.audioOriginalFilename || "Voice attachment ready";
+
+  const player = document.createElement("audio");
+  player.controls = true;
+  player.src = draft.audioUrl;
+
+  voiceModalPreviewEl.append(label, player);
+  voiceModalPreviewEl.hidden = false;
+}
+
+function updateVoiceModalIndicators(statusText) {
+  voiceRecordingStatusEl.textContent = statusText;
+  voiceRecordingStatusEl.classList.toggle("context-chip-muted", statusText === "Idle" || statusText.startsWith("Checking"));
+}
+
+async function checkMicrophoneAvailability() {
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    voiceMicStatusEl.textContent = "Mic: unsupported";
+    voiceMicStatusEl.classList.add("context-chip-muted");
+    voiceModalStatusEl.textContent = "Audio recording is not supported in this browser";
+    return;
+  }
+
+  if (!window.isSecureContext && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+    voiceMicStatusEl.textContent = "Mic: blocked";
+    voiceMicStatusEl.classList.add("context-chip-muted");
+    voiceModalStatusEl.textContent = "Microphone recording needs HTTPS or localhost";
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((track) => track.stop());
+    voiceMicStatusEl.textContent = "Mic: detected";
+    voiceMicStatusEl.classList.remove("context-chip-muted");
+    updateVoiceModalIndicators("Idle");
+  } catch (error) {
+    voiceMicStatusEl.textContent = "Mic: unavailable";
+    voiceMicStatusEl.classList.add("context-chip-muted");
+    voiceModalStatusEl.textContent = getRecordingErrorMessage(error);
+    updateVoiceModalIndicators("Idle");
+  }
+}
+
+async function toggleRecording(thread) {
+  if (activeRecordingThread && activeRecordingThread !== thread) {
+    setAudioStatus(thread, "Finish the current recording first");
+    return;
+  }
+
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    mediaRecorder.stop();
+    return;
+  }
+
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    setAudioStatus(thread, "Audio recording is not supported in this browser");
+    return;
+  }
+
+  if (!window.isSecureContext && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+    setAudioStatus(thread, "Microphone recording needs HTTPS or localhost");
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recordingChunks = [];
+    recordingStream = stream;
+    activeRecordingThread = thread;
+    const mimeType = getSupportedRecordingMimeType();
+    mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    mediaRecorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size > 0) {
+        recordingChunks.push(event.data);
+      }
+    });
+    mediaRecorder.addEventListener("stop", async () => {
+      const mimeType = mediaRecorder.mimeType || "audio/webm";
+      const blob = new Blob(recordingChunks, { type: mimeType });
+      recordingStream?.getTracks().forEach((track) => track.stop());
+      recordingStream = null;
+      mediaRecorder = null;
+      const completedThread = activeRecordingThread;
+      activeRecordingThread = null;
+      updateRecordingButtons();
+      if (completedThread) {
+        await transcribeRecordedAudio(completedThread, blob, mimeType);
+      }
+    });
+    mediaRecorder.start();
+    setAudioStatus(thread, "Recording... click again to stop");
+    updateVoiceModalIndicators("Recording...");
+    updateRecordingButtons();
+  } catch (error) {
+    setAudioStatus(thread, getRecordingErrorMessage(error));
+    updateVoiceModalIndicators("Idle");
+  }
+}
+
+function updateRecordingButtons() {
+  const isRecording = mediaRecorder && mediaRecorder.state === "recording";
+  recordUserAudioButton.textContent =
+    isRecording && activeRecordingThread === "user" ? "Stop Recording" : "Record Voice";
+  recordLlmAudioButton.textContent =
+    isRecording && activeRecordingThread === "llm" ? "Stop Recording" : "Record Voice";
+  if (!activeVoiceModalThread) {
+    return;
+  }
+  voiceModalRecordButton.textContent =
+    isRecording && activeRecordingThread === activeVoiceModalThread ? "Stop Recording" : "Start Recording";
+}
+
+function getSupportedRecordingMimeType() {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
+    return "";
+  }
+
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+  ];
+  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || "";
+}
+
+function getRecordingErrorMessage(error) {
+  const name = error?.name || "";
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "Microphone permission was denied";
+  }
+  if (name === "NotFoundError") {
+    return "No microphone was found";
+  }
+  if (name === "NotReadableError") {
+    return "Microphone is busy or unavailable";
+  }
+  return error?.message || "Unable to start recording";
+}
+
+async function transcribeRecordedAudio(thread, blob, mimeType) {
+  const sessionId = sessionInput.value.trim();
+  const userId = getCurrentUserId();
+  if (!sessionId || !userId) {
+    setAudioStatus(thread, "Connect first before recording");
+    return;
+  }
+
+  setAudioStatus(thread, "Transcribing voice note...");
+  updateVoiceModalIndicators("Transcribing...");
+  const formData = new FormData();
+  formData.append("session_id", sessionId);
+  formData.append("user_id", userId);
+  formData.append("thread", thread);
+  formData.append("audio_file", blob, `${thread}-${Date.now()}.webm`);
+
+  try {
+    const response = await fetch("/api/stt/transcribe", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "Speech transcription failed");
+    }
+
+    audioDrafts[thread] = normalizeAudioAttachment(data.audio);
+    renderAudioDraft(thread);
+    modalDraftTranscript = normalizeMessageText(data.transcript);
+    voiceTranscriptTextEl.value = modalDraftTranscript;
+    syncVoiceModalPreview();
+    setAudioStatus(thread, data.language ? `Transcribed (${data.language})` : "Transcribed");
+    updateVoiceModalIndicators("Ready to add");
+  } catch (error) {
+    clearAudioDraft(thread, { clearStatus: false });
+    setAudioStatus(thread, error.message || "Speech transcription failed");
+    updateVoiceModalIndicators("Idle");
+  }
+}
+
+function addVoiceDraftToComposer() {
+  if (!activeVoiceModalThread) {
+    return;
+  }
+  const transcript = normalizeMessageText(voiceTranscriptTextEl.value);
+  modalDraftTranscript = transcript;
+  if (activeVoiceModalThread === "user") {
+    contentInput.value = transcript;
+  } else {
+    llmContentInput.value = transcript;
+  }
+  closeVoiceModal();
 }
 
 function getCurrentUserId() {
@@ -634,7 +995,7 @@ function showContextMenu(event, thread) {
   contextMenuEl.style.top = `${event.clientY}px`;
 }
 
-function sendMessageToUser(content) {
+function sendMessageToUser(content, audio = createEmptyAudioDraft()) {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     statusLabel.textContent = "Connect before sending";
     return false;
@@ -650,6 +1011,9 @@ function sendMessageToUser(content) {
     JSON.stringify({
       receiver: receiverInput.value,
       content: cleanContent,
+      audio_path: audio.audioPath || "",
+      audio_mime_type: audio.audioMimeType || "",
+      audio_original_filename: audio.audioOriginalFilename || "",
       session_id: sessionId,
       experimental_condition: currentCondition,
     }),
@@ -658,7 +1022,7 @@ function sendMessageToUser(content) {
   return true;
 }
 
-async function sendMessageToLlm(content) {
+async function sendMessageToLlm(content, audio = createEmptyAudioDraft()) {
   const messageText = normalizeMessageText(content);
   const sessionId = sessionInput.value.trim();
   const userId = userInput.value;
@@ -670,7 +1034,7 @@ async function sendMessageToLlm(content) {
 
   askLlmButton.disabled = true;
   setLlmStatus("Waiting for local Ollama...");
-  appendLlmPromptMessage(messageText);
+  appendLlmPromptMessage(messageText, audio);
 
   try {
     const response = await fetch("/api/llm/message", {
@@ -682,6 +1046,10 @@ async function sendMessageToLlm(content) {
         session_id: sessionId,
         user_id: userId,
         message_text: messageText,
+        audio_url: audio.audioUrl || "",
+        audio_path: audio.audioPath || "",
+        audio_mime_type: audio.audioMimeType || "",
+        audio_original_filename: audio.audioOriginalFilename || "",
       }),
     });
 
@@ -920,12 +1288,14 @@ messageForm.addEventListener("submit", (event) => {
   event.preventDefault();
 
   const content = normalizeMessageText(contentInput.value);
-  if (!content) {
+  const draft = getAudioDraft("user");
+  if (!content && !draft.audioUrl) {
     return;
   }
 
-  if (sendMessageToUser(content)) {
+  if (sendMessageToUser(content, draft)) {
     contentInput.value = "";
+    clearAudioDraft("user");
   }
 });
 
@@ -933,14 +1303,63 @@ llmForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const content = normalizeMessageText(llmContentInput.value);
-  if (!content) {
+  const draft = getAudioDraft("llm");
+  if (!content && !draft.audioUrl) {
     return;
   }
 
-  const sent = await sendMessageToLlm(content);
+  const sent = await sendMessageToLlm(content, draft);
   if (sent) {
     llmContentInput.value = "";
+    clearAudioDraft("llm");
   }
+});
+
+recordUserAudioButton.addEventListener("click", async () => {
+  openVoiceModal("user");
+});
+
+recordLlmAudioButton.addEventListener("click", async () => {
+  openVoiceModal("llm");
+});
+
+clearUserAudioButton.addEventListener("click", () => {
+  clearAudioDraft("user");
+});
+
+clearLlmAudioButton.addEventListener("click", () => {
+  clearAudioDraft("llm");
+});
+
+voiceModalRecordButton.addEventListener("click", async () => {
+  if (!activeVoiceModalThread) {
+    return;
+  }
+  await toggleRecording(activeVoiceModalThread);
+});
+
+voiceModalClearButton.addEventListener("click", () => {
+  if (!activeVoiceModalThread) {
+    return;
+  }
+  clearAudioDraft(activeVoiceModalThread);
+  voiceTranscriptTextEl.value = "";
+  modalDraftTranscript = "";
+  syncVoiceModalPreview();
+  voiceModalStatusEl.textContent = "Draft cleared";
+  updateVoiceModalIndicators("Idle");
+});
+
+voiceModalAddButton.addEventListener("click", () => {
+  addVoiceDraftToComposer();
+});
+
+closeVoiceModalButton.addEventListener("click", () => {
+  closeVoiceModal();
+});
+
+voiceModalBackdropEl.addEventListener("click", () => {
+  closeVoiceModal();
 });
 
 reindexButton.addEventListener("click", async () => {
