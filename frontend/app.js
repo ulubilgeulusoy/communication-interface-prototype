@@ -13,8 +13,11 @@ const llmMessagesEl = document.querySelector("#llm-messages");
 const userSelectionStatusEl = document.querySelector("#user-selection-status");
 const llmSelectionStatusEl = document.querySelector("#llm-selection-status");
 const llmStatusEl = document.querySelector("#llm-status");
+const llmModeChipEl = document.querySelector("#llm-mode-chip");
+const llmDocumentChipEl = document.querySelector("#llm-document-chip");
 const askLlmButton = document.querySelector("#ask-llm-button");
 const reindexButton = document.querySelector("#reindex-button");
+const clearDocumentButton = document.querySelector("#clear-document-button");
 const contextMenuEl = document.querySelector("#message-menu");
 const contextMenuBackdropEl = document.querySelector("#message-menu-backdrop");
 
@@ -26,6 +29,11 @@ let llmThread = [];
 let selectedUserMessageIds = new Set();
 let selectedLlmMessageIds = new Set();
 let contextThread = null;
+let currentLlmContext = {
+  retrievalMode: "global",
+  activeDocumentTitle: "",
+  activeDocumentId: "",
+};
 
 hideContextMenu();
 userMessagesEl.dataset.empty = "No user messages yet.";
@@ -33,6 +41,7 @@ llmMessagesEl.dataset.empty = "No LLM messages yet.";
 syncEmptyState(userMessagesEl, userThread);
 syncEmptyState(llmMessagesEl, llmThread);
 syncSelectionStatus();
+syncLlmContextDisplay();
 
 function buildClientMessageId(prefix) {
   messageCounter += 1;
@@ -76,6 +85,21 @@ function syncSelectionStatus() {
 
 function setLlmStatus(text) {
   llmStatusEl.textContent = text;
+}
+
+function syncLlmContextDisplay() {
+  llmModeChipEl.textContent = `Mode: ${currentLlmContext.retrievalMode}`;
+  llmDocumentChipEl.textContent = currentLlmContext.activeDocumentTitle || "No active document";
+  llmDocumentChipEl.classList.toggle("context-chip-muted", !currentLlmContext.activeDocumentTitle);
+}
+
+function updateLlmContext(context) {
+  currentLlmContext = {
+    retrievalMode: context.retrievalMode || context.retrieval_mode || "global",
+    activeDocumentTitle: context.activeDocumentTitle || context.active_document_title || "",
+    activeDocumentId: context.activeDocumentId || context.active_document_id || "",
+  };
+  syncLlmContextDisplay();
 }
 
 function updateSelectionStyles(thread) {
@@ -667,6 +691,11 @@ async function sendMessageToLlm(content) {
     }
 
     appendLlmReplyMessage(data);
+    updateLlmContext({
+      retrievalMode: data.retrieval_mode,
+      activeDocumentTitle: data.active_document_title,
+      activeDocumentId: data.active_document_id,
+    });
     setLlmStatus(`LLM replied using ${data.model}`);
     return true;
   } catch (error) {
@@ -686,6 +715,57 @@ async function sendMessageToLlm(content) {
     return false;
   } finally {
     askLlmButton.disabled = false;
+  }
+}
+
+async function loadLlmContext(sessionId, userId) {
+  const response = await fetch(
+    `/api/llm/context?session_id=${encodeURIComponent(sessionId)}&user_id=${encodeURIComponent(userId)}`,
+  );
+  const data = await response.json();
+  updateLlmContext({
+    retrievalMode: data.retrieval_mode,
+    activeDocumentTitle: data.active_document_title,
+    activeDocumentId: data.active_document_id,
+  });
+}
+
+async function clearLlmDocumentContext() {
+  const sessionId = sessionInput.value.trim();
+  const userId = getCurrentUserId();
+  if (!sessionId || !userId) {
+    setLlmStatus("Connect first to manage document context");
+    return;
+  }
+
+  clearDocumentButton.disabled = true;
+  try {
+    const response = await fetch("/api/llm/context/clear", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        user_id: userId,
+        message_text: "clear",
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "Unable to clear document context");
+    }
+
+    updateLlmContext({
+      retrievalMode: data.retrieval_mode,
+      activeDocumentTitle: data.active_document_title,
+      activeDocumentId: data.active_document_id,
+    });
+    setLlmStatus("Cleared document context");
+  } catch (error) {
+    setLlmStatus(error.message || "Unable to clear document context");
+  } finally {
+    clearDocumentButton.disabled = false;
   }
 }
 
@@ -772,6 +852,7 @@ async function loadSessionHistory(sessionId) {
   }
 
   sessionInput.value = data.session_id;
+  await loadLlmContext(data.session_id, currentUserId);
 }
 
 async function connect(userId, sessionId) {
@@ -864,6 +945,10 @@ llmForm.addEventListener("submit", async (event) => {
 
 reindexButton.addEventListener("click", async () => {
   await reindexKnowledgeBase();
+});
+
+clearDocumentButton.addEventListener("click", async () => {
+  await clearLlmDocumentContext();
 });
 
 userMessagesEl.addEventListener("click", (event) => {

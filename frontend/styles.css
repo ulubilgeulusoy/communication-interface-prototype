@@ -443,6 +443,36 @@ h2 {
   min-height: 1.2rem;
 }
 
+.llm-context-bar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.context-chip {
+  align-items: center;
+  background: rgba(30, 77, 143, 0.1);
+  border: 1px solid rgba(30, 77, 143, 0.14);
+  border-radius: 999px;
+  color: var(--blue-deep);
+  display: inline-flex;
+  font-size: 0.8rem;
+  font-weight: 700;
+  min-height: 2rem;
+  padding: 0.35rem 0.75rem;
+}
+
+.context-chip-muted {
+  background: rgba(63, 54, 45, 0.06);
+  border-color: rgba(63, 54, 45, 0.1);
+  color: var(--muted);
+}
+
+.ghost-button-subtle {
+  padding: 0.45rem 0.8rem;
+}
+
 .composer {
   grid-template-columns: 160px minmax(0, 1fr) auto;
 }
@@ -533,7 +563,8 @@ h2 {
   }
 
   .thread-header,
-  .selection-bar {
+  .selection-bar,
+  .llm-context-bar {
     align-items: start;
     flex-direction: column;
   }

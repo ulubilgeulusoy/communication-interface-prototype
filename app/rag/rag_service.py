@@ -99,6 +99,7 @@ class RAGService:
         llm_thread_history: str = "",
         active_document_hint: str = "",
         active_document_id: str = "",
+        retrieval_mode: str = "global",
         model: str | None = None,
         system_prompt: str | None = None,
         top_k: int | None = None,
@@ -108,6 +109,21 @@ class RAGService:
         cleaned_message = str(message_text).strip()
         if not cleaned_message:
             raise RAGServiceError("User message cannot be empty.")
+
+        if retrieval_mode == "disabled":
+            llm_response = await self.llm_service.generate_reply(
+                message_text=cleaned_message,
+                conversation_history=conversation_history,
+                llm_thread_history=llm_thread_history,
+                model=model,
+                system_prompt=system_prompt,
+            )
+            return RAGReply(
+                llm_response=llm_response,
+                retrieved_chunks=[],
+                augmented_message=cleaned_message,
+                used_retrieval=False,
+            )
 
         retrieval_message = self._rewrite_follow_up_query(
             cleaned_message,

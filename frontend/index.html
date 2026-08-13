@@ -83,6 +83,12 @@
 
           <div id="llm-messages" class="messages" aria-live="polite"></div>
 
+          <div class="llm-context-bar">
+            <span id="llm-mode-chip" class="context-chip">Mode: global</span>
+            <span id="llm-document-chip" class="context-chip context-chip-muted">No active document</span>
+            <button type="button" id="clear-document-button" class="ghost-button ghost-button-subtle">Clear Document</button>
+          </div>
+
           <div class="selection-bar">
             <span id="llm-selection-status">No LLM messages selected</span>
             <span id="llm-status" class="llm-status"></span>

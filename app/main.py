@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 import re
+from dataclasses import dataclass
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -41,7 +43,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 ollama_service = OllamaService()
 rag_service = RAGService(ollama_service)
 LLM_HISTORY_LIMIT = 12
-LLM_THREAD_HISTORY_LIMIT = 6
+LLM_THREAD_HISTORY_LIMIT = 4
 
 
 class LLMRequest(BaseModel):
@@ -59,6 +61,9 @@ class LLMReply(BaseModel):
     timestamp: str
     retrieved_chunks: list[dict] = Field(default_factory=list)
     used_retrieval: bool = False
+    retrieval_mode: str = "global"
+    active_document_title: str = ""
+    active_document_id: str = ""
 
 
 class SessionHistory(BaseModel):
@@ -75,7 +80,72 @@ class RAGReindexReply(BaseModel):
     knowledge_base_path: str
 
 
+class LLMContextReply(BaseModel):
+    session_id: str
+    user_id: str
+    retrieval_mode: str
+    active_document_title: str
+    active_document_id: str
+
+
 QUOTED_TITLE_PATTERN = re.compile(r'"([^"]{3,})"|\'([^\']{3,})\'')
+GUIDE_ID_PATTERN = re.compile(r"\b1\d{5}\b")
+SWITCH_DOCUMENT_PATTERN = re.compile(
+    r"\b(switch to|use|talk about|focus on|now use|different procedure|new document)\b",
+    re.IGNORECASE,
+)
+CLEAR_DOCUMENT_PHRASES = (
+    "clear document",
+    "clear the document",
+    "clear current document",
+    "clear the current document",
+    "discard document",
+    "discard the document",
+    "discard current document",
+    "discard the current document",
+    "discard documentation",
+    "discard the documentation",
+    "discard current documentation",
+    "discard the current documentation",
+    "remove document",
+    "remove the document",
+    "remove current document",
+    "remove the current document",
+    "remove documentation",
+    "remove the documentation",
+    "remove manual",
+    "remove the manual",
+    "ignore document",
+    "ignore documents",
+    "ignore the document",
+    "ignore the documents",
+    "ignore documentation",
+    "ignore the documentation",
+    "stop using the document",
+    "stop using document",
+    "stop using the documentation",
+    "stop using documentation",
+    "stop using the manual",
+    "stop using manual",
+    "use general knowledge",
+    "general knowledge only",
+    "no manual",
+)
+
+
+@dataclass(frozen=True)
+class DocumentRecord:
+    document_id: str
+    title: str
+    filename: str
+    guide_id: str
+
+
+@dataclass
+class LLMContextState:
+    retrieval_mode: str = "global"
+    active_document_title: str = ""
+    active_document_id: str = ""
 
 
 def build_conversation_history(session_id: str, limit: int = LLM_HISTORY_LIMIT) -> str:
@@ -200,6 +270,89 @@ def _find_matching_source(retrieved_sources: list[dict], quoted_title: str) -> t
     return None
 
 
+def should_clear_document_context(message_text: str) -> bool:
+    normalized = " ".join(str(message_text).lower().split())
+    return any(phrase in normalized for phrase in CLEAR_DOCUMENT_PHRASES)
+
+
+@lru_cache(maxsize=1)
+def get_document_catalog() -> tuple[DocumentRecord, ...]:
+    records: list[DocumentRecord] = []
+    for document in load_documents(KNOWLEDGE_BASE_PATH):
+        title = _extract_document_title(document.text) or Path(document.filename).stem.replace("_", " ").replace("-", " ").strip()
+        guide_id_match = GUIDE_ID_PATTERN.search(document.text) or GUIDE_ID_PATTERN.search(document.filename)
+        records.append(
+            DocumentRecord(
+                document_id=document.document_id,
+                title=title.strip(),
+                filename=document.filename,
+                guide_id=guide_id_match.group(0) if guide_id_match else "",
+            )
+        )
+    return tuple(records)
+
+
+def _extract_document_title(text: str) -> str:
+    for line in str(text).splitlines():
+        cleaned = line.strip()
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def resolve_document_reference(message_text: str) -> DocumentRecord | None:
+    quoted_title = _extract_quoted_title(message_text)
+    guide_id_match = GUIDE_ID_PATTERN.search(message_text)
+    lowered_message = message_text.lower()
+
+    catalog = get_document_catalog()
+    if guide_id_match:
+        guide_id = guide_id_match.group(0)
+        for record in catalog:
+            if record.guide_id == guide_id:
+                return record
+
+    if quoted_title:
+        lowered_title = quoted_title.lower().strip()
+        exact_matches = [record for record in catalog if record.title.lower() == lowered_title]
+        if exact_matches:
+            return exact_matches[0]
+
+        partial_matches = [
+            record
+            for record in catalog
+            if lowered_title in record.title.lower() or lowered_title in record.filename.lower()
+        ]
+        if partial_matches:
+            return partial_matches[0]
+
+    switch_requested = bool(SWITCH_DOCUMENT_PATTERN.search(message_text))
+    if switch_requested:
+        for record in catalog:
+            if record.title.lower() in lowered_message:
+                return record
+
+    return None
+
+
+class LLMContextManager:
+    def __init__(self) -> None:
+        self._states: dict[tuple[str, str], LLMContextState] = {}
+
+    def get(self, session_id: str, user_id: str) -> LLMContextState:
+        return self._states.get((session_id, user_id), LLMContextState())
+
+    def set(self, session_id: str, user_id: str, state: LLMContextState) -> None:
+        self._states[(session_id, user_id)] = state
+
+    def clear(self, session_id: str, user_id: str) -> None:
+        self._states[(session_id, user_id)] = LLMContextState(
+            retrieval_mode="global",
+            active_document_title="",
+            active_document_id="",
+        )
+
+
 class ConnectionManager:
     def __init__(self) -> None:
         self.active: dict[str, WebSocket] = {}
@@ -221,6 +374,7 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+llm_context_manager = LLMContextManager()
 
 
 @app.on_event("startup")
@@ -258,6 +412,48 @@ def get_session_history(session_id: str) -> SessionHistory:
     )
 
 
+@app.get("/api/llm/context", response_model=LLMContextReply)
+def get_llm_context(
+    session_id: str = Query(..., min_length=1),
+    user_id: str = Query(..., min_length=1),
+) -> LLMContextReply:
+    safe_session_id = sanitize_session_id(session_id)
+    state = llm_context_manager.get(safe_session_id, user_id)
+    if not state.active_document_title and not state.active_document_id:
+        inferred_title, inferred_document_id = infer_active_document_context(
+            safe_session_id,
+            user_id=user_id,
+        )
+        state = LLMContextState(
+            retrieval_mode="document" if inferred_document_id else state.retrieval_mode,
+            active_document_title=inferred_title,
+            active_document_id=inferred_document_id,
+        )
+        llm_context_manager.set(safe_session_id, user_id, state)
+
+    return LLMContextReply(
+        session_id=safe_session_id,
+        user_id=user_id,
+        retrieval_mode=state.retrieval_mode,
+        active_document_title=state.active_document_title,
+        active_document_id=state.active_document_id,
+    )
+
+
+@app.post("/api/llm/context/clear", response_model=LLMContextReply)
+def clear_llm_context(payload: LLMRequest) -> LLMContextReply:
+    safe_session_id = sanitize_session_id(payload.session_id)
+    llm_context_manager.clear(safe_session_id, payload.user_id)
+    state = llm_context_manager.get(safe_session_id, payload.user_id)
+    return LLMContextReply(
+        session_id=safe_session_id,
+        user_id=payload.user_id,
+        retrieval_mode=state.retrieval_mode,
+        active_document_title=state.active_document_title,
+        active_document_id=state.active_document_id,
+    )
+
+
 @app.post("/api/llm/message", response_model=LLMReply)
 async def ask_llm(payload: LLMRequest) -> LLMReply:
     safe_session_id = sanitize_session_id(payload.session_id)
@@ -267,10 +463,34 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
         safe_session_id,
         user_id=payload.user_id,
     )
-    active_document_hint, active_document_id = infer_active_document_context(
-        safe_session_id,
-        user_id=payload.user_id,
-    )
+    current_state = llm_context_manager.get(safe_session_id, payload.user_id)
+    explicit_clear = should_clear_document_context(payload.message_text)
+    explicit_document = resolve_document_reference(payload.message_text)
+
+    if explicit_clear:
+        current_state = LLMContextState(
+            retrieval_mode="disabled",
+            active_document_title="",
+            active_document_id="",
+        )
+    elif explicit_document:
+        current_state = LLMContextState(
+            retrieval_mode="document",
+            active_document_title=explicit_document.title,
+            active_document_id=explicit_document.document_id,
+        )
+    elif not current_state.active_document_title and not current_state.active_document_id:
+        inferred_title, inferred_document_id = infer_active_document_context(
+            safe_session_id,
+            user_id=payload.user_id,
+        )
+        current_state = LLMContextState(
+            retrieval_mode="document" if inferred_document_id else "global",
+            active_document_title=inferred_title,
+            active_document_id=inferred_document_id,
+        )
+
+    llm_context_manager.set(safe_session_id, payload.user_id, current_state)
 
     try:
         rag_reply = await rag_service.generate_reply(
@@ -278,8 +498,9 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
             session_id=safe_session_id,
             conversation_history=conversation_history,
             llm_thread_history=llm_thread_history,
-            active_document_hint=active_document_hint,
-            active_document_id=active_document_id,
+            active_document_hint=current_state.active_document_title,
+            active_document_id=current_state.active_document_id,
+            retrieval_mode=current_state.retrieval_mode,
             model=payload.model,
         )
     except OllamaServiceError as exc:
@@ -311,6 +532,29 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
         retrieved_sources_json=json.dumps(retrieved_chunks_payload),
     )
 
+    if rag_reply.used_retrieval and retrieved_chunks_payload and current_state.retrieval_mode != "disabled":
+        first_chunk = rag_reply.retrieved_chunks[0]
+        resolved_title = current_state.active_document_title or Path(first_chunk.filename).stem.replace("_", " ").replace("-", " ").strip()
+        current_state = LLMContextState(
+            retrieval_mode="document",
+            active_document_title=resolved_title,
+            active_document_id=first_chunk.document_id,
+        )
+    elif current_state.retrieval_mode == "disabled":
+        current_state = LLMContextState(
+            retrieval_mode="disabled",
+            active_document_title="",
+            active_document_id="",
+        )
+    elif explicit_clear:
+        current_state = LLMContextState(
+            retrieval_mode="disabled",
+            active_document_title="",
+            active_document_id="",
+        )
+
+    llm_context_manager.set(safe_session_id, payload.user_id, current_state)
+
     return LLMReply(
         session_id=safe_session_id,
         user_id=payload.user_id,
@@ -319,6 +563,9 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
         timestamp=timestamp,
         retrieved_chunks=retrieved_chunks_payload,
         used_retrieval=rag_reply.used_retrieval,
+        retrieval_mode=current_state.retrieval_mode,
+        active_document_title=current_state.active_document_title,
+        active_document_id=current_state.active_document_id,
     )
 
 
@@ -335,6 +582,7 @@ async def reindex_knowledge_base() -> RAGReindexReply:
         )
     except (EmbeddingServiceError, RetrievalServiceError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    get_document_catalog.cache_clear()
     indexed_files = len(load_documents(KNOWLEDGE_BASE_PATH))
     return RAGReindexReply(
         indexed_files=indexed_files,
