@@ -125,6 +125,13 @@ label,
   padding: 0.75rem;
 }
 
+.hero-layout {
+  align-items: start;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr) 272px;
+}
+
 .panel {
   backdrop-filter: blur(10px);
   background: var(--panel);
@@ -195,6 +202,43 @@ h2 {
 
 .settings {
   grid-template-columns: minmax(220px, 240px) minmax(240px, 1fr) auto;
+}
+
+.delay-card {
+  align-content: start;
+  align-items: stretch;
+  background: rgba(255, 247, 235, 0.92);
+  border: 1px solid rgba(178, 76, 45, 0.14);
+  border-radius: 18px;
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.7rem;
+}
+
+.delay-card-controls {
+  align-items: end;
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.delay-card-controls label,
+.delay-status {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.delay-status {
+  min-height: 1lh;
+}
+
+.delay-card input,
+.delay-card button {
+  padding-block: 0.7rem;
+}
+
+.delay-card button {
+  white-space: nowrap;
 }
 
 .status-row {
@@ -545,9 +589,18 @@ h2 {
     overflow: auto;
   }
 
+  .hero-layout,
   .workspace-layout,
   .settings,
   .composer {
+    grid-template-columns: 1fr;
+  }
+
+  .delay-card {
+    width: 100%;
+  }
+
+  .delay-card-controls {
     grid-template-columns: 1fr;
   }
 

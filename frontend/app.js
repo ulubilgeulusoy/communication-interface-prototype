@@ -1,13 +1,15 @@
 const settingsForm = document.querySelector("#settings-form");
+const delayForm = document.querySelector("#delay-form");
 const messageForm = document.querySelector("#message-form");
 const llmForm = document.querySelector("#llm-form");
 const userInput = document.querySelector("#user-id");
 const receiverInput = document.querySelector("#receiver-id");
 const sessionInput = document.querySelector("#session-id");
+const delayInput = document.querySelector("#delay-seconds");
 const contentInput = document.querySelector("#message-content");
 const llmContentInput = document.querySelector("#llm-content");
 const statusLabel = document.querySelector("#connection-status");
-const conditionLabel = document.querySelector("#condition-label");
+const delayStatusLabel = document.querySelector("#delay-status");
 const userMessagesEl = document.querySelector("#user-messages");
 const llmMessagesEl = document.querySelector("#llm-messages");
 const userSelectionStatusEl = document.querySelector("#user-selection-status");
@@ -23,6 +25,7 @@ const contextMenuBackdropEl = document.querySelector("#message-menu-backdrop");
 
 let socket = null;
 let currentCondition = null;
+let currentDelayMs = 0;
 let messageCounter = 0;
 let userThread = [];
 let llmThread = [];
@@ -85,6 +88,20 @@ function syncSelectionStatus() {
 
 function setLlmStatus(text) {
   llmStatusEl.textContent = text;
+}
+
+function formatDelayLabel(delayMs) {
+  const safeDelayMs = Math.max(0, Number(delayMs) || 0);
+  const delaySeconds = safeDelayMs / 1000;
+  if (Number.isInteger(delaySeconds)) {
+    return `${delaySeconds}s`;
+  }
+  return `${delaySeconds.toFixed(1)}s`;
+}
+
+function syncDelayDisplay() {
+  delayInput.value = String(Math.max(0, Math.round(currentDelayMs / 1000)));
+  delayStatusLabel.textContent = `Current delay: ${formatDelayLabel(currentDelayMs)}`;
 }
 
 function syncLlmContextDisplay() {
@@ -152,6 +169,11 @@ function createDeliveryText(message) {
       return message.receivedTimestamp ? `Received ${message.receivedTimestamp}` : "Received";
     }
 
+    if (message.deliveryPending) {
+      const delayLabel = message.delayMs > 0 ? ` for ${formatDelayLabel(message.delayMs)}` : "";
+      return `Waiting for delayed delivery${delayLabel}`;
+    }
+
     return message.deliveredTimestamp ? `Delivered ${message.deliveredTimestamp}` : "Sending";
   }
 
@@ -187,6 +209,24 @@ function appendMessageToThread(message) {
   container.scrollTop = container.scrollHeight;
   syncEmptyState(container, threadMessages);
   updateSelectionStyles(message.thread);
+}
+
+function updateUserMessageDelivery(payload) {
+  const messageId = String(payload.id);
+  const message = userThread.find((entry) => entry.id === messageId);
+  if (!message) {
+    return;
+  }
+
+  message.deliveredTimestamp = payload.delivered_timestamp ?? null;
+  message.deliveryPending = false;
+  message.delayMs = Number(payload.delay_ms) || message.delayMs || 0;
+
+  const row = userMessagesEl.querySelector(`.message[data-id="${CSS.escape(messageId)}"]`);
+  const delivery = row?.querySelector(".delivery");
+  if (delivery) {
+    delivery.textContent = createDeliveryText(message);
+  }
 }
 
 function buildMessageBody(message) {
@@ -489,6 +529,8 @@ function appendUserThreadMessage(payload, direction) {
     body: normalizeMessageText(payload.content),
     timestamp: payload.sent_timestamp,
     deliveredTimestamp: payload.delivered_timestamp ?? null,
+    deliveryPending: Boolean(payload.delivery_pending),
+    delayMs: Number(payload.delay_ms) || 0,
     receivedTimestamp: direction === "incoming" ? new Date().toISOString() : null,
   });
 }
@@ -504,6 +546,8 @@ function appendHistoricalUserMessage(message) {
     body: normalizeMessageText(message.content),
     timestamp: message.sent_timestamp,
     deliveredTimestamp: message.delivered_timestamp ?? null,
+    deliveryPending: false,
+    delayMs: Number(message.delay_ms) || currentDelayMs || 0,
     receivedTimestamp: isOutgoing ? null : message.delivered_timestamp ?? message.sent_timestamp,
   });
 }
@@ -826,8 +870,45 @@ async function loadCondition(sessionId) {
   const response = await fetch(`/api/condition/${encodeURIComponent(sessionId)}`);
   const data = await response.json();
   currentCondition = data.experimental_condition;
-  conditionLabel.textContent = `Condition: ${currentCondition}`;
   sessionInput.value = data.session_id;
+}
+
+async function loadSessionDelay(sessionId) {
+  const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}/delay`);
+  const data = await response.json();
+  currentDelayMs = Number(data.delay_ms) || 0;
+  syncDelayDisplay();
+}
+
+async function saveSessionDelay() {
+  const sessionId = sessionInput.value.trim();
+  if (!sessionId) {
+    delayStatusLabel.textContent = "Enter a session ID first";
+    return;
+  }
+
+  const delaySeconds = Math.max(0, Number(delayInput.value) || 0);
+  delayStatusLabel.textContent = "Saving delay...";
+
+  const response = await fetch("/api/session/delay", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      session_id: sessionId,
+      delay_ms: Math.round(delaySeconds * 1000),
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "Unable to save session delay");
+  }
+
+  currentDelayMs = Number(data.delay_ms) || 0;
+  sessionInput.value = data.session_id;
+  syncDelayDisplay();
 }
 
 async function loadSessionHistory(sessionId) {
@@ -852,6 +933,8 @@ async function loadSessionHistory(sessionId) {
   }
 
   sessionInput.value = data.session_id;
+  currentDelayMs = Number(data.delay_ms) || 0;
+  syncDelayDisplay();
   await loadLlmContext(data.session_id, currentUserId);
 }
 
@@ -861,6 +944,7 @@ async function connect(userId, sessionId) {
   }
 
   await loadCondition(sessionId);
+  await loadSessionDelay(sessionId);
   await loadSessionHistory(sessionInput.value.trim());
 
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -881,6 +965,9 @@ async function connect(userId, sessionId) {
     }
     if (payload.type === "ack") {
       appendUserThreadMessage(payload, "outgoing");
+    }
+    if (payload.type === "delivery_update") {
+      updateUserMessageDelivery(payload);
     }
   });
 }
@@ -914,6 +1001,15 @@ function handleMessageContextMenu(event, thread) {
 settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await connect(userInput.value, sessionInput.value.trim());
+});
+
+delayForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await saveSessionDelay();
+  } catch (error) {
+    delayStatusLabel.textContent = error.message || "Unable to save session delay";
+  }
 });
 
 messageForm.addEventListener("submit", (event) => {

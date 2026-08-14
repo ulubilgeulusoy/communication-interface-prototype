@@ -44,6 +44,14 @@ def init_db(session_id: str | None = None) -> None:
     with get_connection(session_id) as conn:
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS session_settings (
+                session_id TEXT PRIMARY KEY,
+                delay_ms INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 sender TEXT NOT NULL,
@@ -51,6 +59,7 @@ def init_db(session_id: str | None = None) -> None:
                 content TEXT NOT NULL,
                 sent_timestamp TEXT NOT NULL,
                 delivered_timestamp TEXT,
+                delay_ms INTEGER NOT NULL DEFAULT 0,
                 session_id TEXT NOT NULL,
                 experimental_condition TEXT NOT NULL
             )
@@ -72,9 +81,23 @@ def init_db(session_id: str | None = None) -> None:
         )
         _ensure_column(
             conn,
+            table_name="messages",
+            column_name="delay_ms",
+            column_definition="INTEGER NOT NULL DEFAULT 0",
+        )
+        _ensure_column(
+            conn,
             table_name="llm_interactions",
             column_name="retrieved_sources_json",
             column_definition="TEXT",
+        )
+        conn.execute(
+            """
+            INSERT INTO session_settings (session_id, delay_ms)
+            VALUES (?, 0)
+            ON CONFLICT(session_id) DO NOTHING
+            """,
+            (session_id,),
         )
 
 
@@ -88,6 +111,7 @@ def log_message(
     receiver: str,
     content: str,
     sent_timestamp: str,
+    delay_ms: int,
     session_id: str,
     experimental_condition: str,
 ) -> int:
@@ -100,16 +124,18 @@ def log_message(
                 receiver,
                 content,
                 sent_timestamp,
+                delay_ms,
                 session_id,
                 experimental_condition
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sender,
                 receiver,
                 content,
                 sent_timestamp,
+                max(0, int(delay_ms)),
                 session_id,
                 experimental_condition,
             ),
@@ -124,6 +150,33 @@ def mark_delivered(session_id: str, message_id: int, delivered_timestamp: str) -
             "UPDATE messages SET delivered_timestamp = ? WHERE id = ?",
             (delivered_timestamp, message_id),
         )
+
+
+def get_session_delay_ms(session_id: str) -> int:
+    init_db(session_id)
+    with get_connection(session_id) as conn:
+        row = conn.execute(
+            "SELECT delay_ms FROM session_settings WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return 0
+        return max(0, int(row["delay_ms"]))
+
+
+def set_session_delay_ms(session_id: str, delay_ms: int) -> int:
+    safe_delay_ms = max(0, int(delay_ms))
+    init_db(session_id)
+    with get_connection(session_id) as conn:
+        conn.execute(
+            """
+            INSERT INTO session_settings (session_id, delay_ms)
+            VALUES (?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET delay_ms = excluded.delay_ms
+            """,
+            (session_id, safe_delay_ms),
+        )
+    return safe_delay_ms
 
 
 def list_messages(session_id: str) -> list[dict[str, Any]]:

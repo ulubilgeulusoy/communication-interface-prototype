@@ -8,32 +8,44 @@
   </head>
   <body>
     <main class="app-shell">
-      <section class="panel hero-panel">
-        <div class="hero-copy">
-          <p class="eyebrow">Communication Workspace</p>
-        </div>
+      <section class="hero-layout">
+        <section class="panel hero-panel">
+          <div class="hero-copy">
+            <p class="eyebrow">Communication Workspace</p>
+          </div>
 
-        <form id="settings-form" class="settings">
-          <label>
-            Your user
-            <select id="user-id">
-              <option value="user_a">User A</option>
-              <option value="user_b">User B</option>
-            </select>
-          </label>
+          <form id="settings-form" class="settings">
+            <label>
+              Your user
+              <select id="user-id">
+                <option value="user_a">User A</option>
+                <option value="user_b">User B</option>
+              </select>
+            </label>
 
-          <label>
-            Session ID
-            <input id="session-id" value="session-001" autocomplete="off" />
-          </label>
+            <label>
+              Session ID
+              <input id="session-id" value="session-001" autocomplete="off" />
+            </label>
 
-          <button type="submit">Connect</button>
+            <button type="submit">Connect</button>
+          </form>
+
+          <div class="status-row">
+            <span id="connection-status">Disconnected</span>
+          </div>
+        </section>
+
+        <form id="delay-form" class="panel delay-card">
+          <div class="delay-card-controls">
+            <label>
+            Delay (seconds)
+            <input id="delay-seconds" type="number" min="0" max="600" step="1" value="0" />
+            </label>
+            <button type="submit" class="ghost-button">Apply Delay</button>
+          </div>
+          <span id="delay-status" class="delay-status">Current delay: 0s</span>
         </form>
-
-        <div class="status-row">
-          <span id="connection-status">Disconnected</span>
-          <span id="condition-label">Condition: unknown</span>
-        </div>
       </section>
 
       <section class="workspace-layout">

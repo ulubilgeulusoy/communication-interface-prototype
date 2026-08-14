@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -12,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .db import (
+    get_session_delay_ms,
     init_db,
     list_llm_interactions,
     list_messages,
@@ -21,6 +23,7 @@ from .db import (
     log_message,
     mark_delivered,
     sanitize_session_id,
+    set_session_delay_ms,
     utc_now_iso,
 )
 from .experiment import assign_condition
@@ -76,6 +79,12 @@ class SessionHistory(BaseModel):
     session_id: str
     messages: list[dict]
     llm_interactions: list[dict]
+    delay_ms: int = 0
+
+
+class DelaySettings(BaseModel):
+    session_id: str = Field(min_length=1)
+    delay_ms: int = Field(default=0, ge=0, le=600000)
 
 
 class RAGReindexReply(BaseModel):
@@ -383,6 +392,37 @@ manager = ConnectionManager()
 llm_context_manager = LLMContextManager()
 
 
+async def deliver_message_with_delay(
+    *,
+    sender: str,
+    receiver: str,
+    session_id: str,
+    message_id: int,
+    message: dict,
+    delay_ms: int,
+) -> None:
+    if delay_ms > 0:
+        await asyncio.sleep(delay_ms / 1000)
+
+    delivered = await manager.send_to_user(receiver, {"type": "message", **message})
+    if delivered:
+        delivered_timestamp = utc_now_iso()
+        mark_delivered(session_id, message_id, delivered_timestamp)
+        message["delivered_timestamp"] = delivered_timestamp
+
+    await manager.send_to_user(
+        sender,
+        {
+            "type": "delivery_update",
+            "id": message_id,
+            "session_id": session_id,
+            "delivered": delivered,
+            "delivered_timestamp": message.get("delivered_timestamp"),
+            "delay_ms": delay_ms,
+        },
+    )
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_db()
@@ -415,6 +455,25 @@ def get_session_history(session_id: str) -> SessionHistory:
         session_id=safe_session_id,
         messages=list_messages(safe_session_id),
         llm_interactions=list_llm_interactions(safe_session_id),
+        delay_ms=get_session_delay_ms(safe_session_id),
+    )
+
+
+@app.get("/api/session/{session_id}/delay", response_model=DelaySettings)
+def get_session_delay(session_id: str) -> DelaySettings:
+    safe_session_id = sanitize_session_id(session_id)
+    return DelaySettings(
+        session_id=safe_session_id,
+        delay_ms=get_session_delay_ms(safe_session_id),
+    )
+
+
+@app.post("/api/session/delay", response_model=DelaySettings)
+def update_session_delay(payload: DelaySettings) -> DelaySettings:
+    safe_session_id = sanitize_session_id(payload.session_id)
+    return DelaySettings(
+        session_id=safe_session_id,
+        delay_ms=set_session_delay_ms(safe_session_id, payload.delay_ms),
     )
 
 
@@ -637,6 +696,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
             experimental_condition = str(
                 data.get("experimental_condition") or assign_condition(session_id)
             )
+            delay_ms = get_session_delay_ms(session_id)
             sent_timestamp = utc_now_iso()
 
             message_id = log_message(
@@ -644,6 +704,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
                 receiver=receiver,
                 content=content,
                 sent_timestamp=sent_timestamp,
+                delay_ms=delay_ms,
                 session_id=session_id,
                 experimental_condition=experimental_condition,
             )
@@ -657,14 +718,27 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
                 "delivered_timestamp": None,
                 "session_id": session_id,
                 "experimental_condition": experimental_condition,
+                "delay_ms": delay_ms,
             }
 
-            delivered = await manager.send_to_user(receiver, {"type": "message", **message})
-            if delivered:
-                delivered_timestamp = utc_now_iso()
-                mark_delivered(session_id, message_id, delivered_timestamp)
-                message["delivered_timestamp"] = delivered_timestamp
+            asyncio.create_task(
+                deliver_message_with_delay(
+                    sender=user_id,
+                    receiver=receiver,
+                    session_id=session_id,
+                    message_id=message_id,
+                    message=dict(message),
+                    delay_ms=delay_ms,
+                )
+            )
 
-            await websocket.send_json({"type": "ack", "delivered": delivered, **message})
+            await websocket.send_json(
+                {
+                    "type": "ack",
+                    "delivered": False,
+                    "delivery_pending": True,
+                    **message,
+                }
+            )
     except WebSocketDisconnect:
         manager.disconnect(user_id)
