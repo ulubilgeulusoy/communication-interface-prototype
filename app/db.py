@@ -75,7 +75,8 @@ def init_db(session_id: str | None = None) -> None:
                 model TEXT NOT NULL,
                 input_text TEXT NOT NULL,
                 output_text TEXT NOT NULL,
-                retrieved_sources_json TEXT
+                retrieved_sources_json TEXT,
+                response_latency_ms INTEGER
             )
             """
         )
@@ -90,6 +91,12 @@ def init_db(session_id: str | None = None) -> None:
             table_name="llm_interactions",
             column_name="retrieved_sources_json",
             column_definition="TEXT",
+        )
+        _ensure_column(
+            conn,
+            table_name="llm_interactions",
+            column_name="response_latency_ms",
+            column_definition="INTEGER",
         )
         conn.execute(
             """
@@ -210,6 +217,7 @@ def log_llm_interaction(
     input_text: str,
     output_text: str,
     retrieved_sources_json: str | None = None,
+    response_latency_ms: int | None = None,
 ) -> int:
     init_db(session_id)
     with get_connection(session_id) as conn:
@@ -222,9 +230,10 @@ def log_llm_interaction(
                 model,
                 input_text,
                 output_text,
-                retrieved_sources_json
+                retrieved_sources_json,
+                response_latency_ms
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 timestamp,
@@ -234,9 +243,28 @@ def log_llm_interaction(
                 input_text,
                 output_text,
                 retrieved_sources_json,
+                response_latency_ms,
             ),
         )
         return int(cursor.lastrowid)
+
+
+def update_llm_interaction_latency(
+    *,
+    session_id: str,
+    interaction_id: int,
+    response_latency_ms: int,
+) -> None:
+    init_db(session_id)
+    with get_connection(session_id) as conn:
+        conn.execute(
+            """
+            UPDATE llm_interactions
+            SET response_latency_ms = ?
+            WHERE id = ? AND session_id = ?
+            """,
+            (max(0, int(response_latency_ms)), interaction_id, session_id),
+        )
 
 
 def list_llm_interactions(session_id: str) -> list[dict[str, Any]]:

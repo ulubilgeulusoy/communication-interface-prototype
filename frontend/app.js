@@ -99,6 +99,14 @@ function formatDelayLabel(delayMs) {
   return `${delaySeconds.toFixed(1)}s`;
 }
 
+function formatLatencyLabel(latencyMs) {
+  const safeLatencyMs = Math.max(0, Number(latencyMs) || 0);
+  if (safeLatencyMs < 1000) {
+    return `${safeLatencyMs} ms`;
+  }
+  return `${(safeLatencyMs / 1000).toFixed(2)} s`;
+}
+
 function syncDelayDisplay() {
   delayInput.value = String(Math.max(0, Math.round(currentDelayMs / 1000)));
   delayStatusLabel.textContent = `Current delay: ${formatDelayLabel(currentDelayMs)}`;
@@ -160,7 +168,10 @@ function createMetaText(message) {
     return `${message.sender} -> LLM | ${message.timestamp}`;
   }
 
-  return `LLM (${message.model}) -> ${message.receiver} | ${message.timestamp}`;
+  const latencyLabel = message.responseLatencyMs != null
+    ? ` | ${formatLatencyLabel(message.responseLatencyMs)}`
+    : "";
+  return `LLM (${message.model}) -> ${message.receiver} | ${message.timestamp}${latencyLabel}`;
 }
 
 function createDeliveryText(message) {
@@ -569,7 +580,7 @@ function appendLlmPromptMessage(text) {
 
 function appendLlmReplyMessage(payload) {
   appendMessageToThread({
-    id: buildClientMessageId("llm-assistant"),
+    id: `llm-assistant-${payload.interaction_id ?? buildClientMessageId("live")}`,
     thread: "llm",
     appearance: "llm-assistant",
     role: "assistant",
@@ -579,6 +590,8 @@ function appendLlmReplyMessage(payload) {
     timestamp: payload.timestamp,
     sessionId: payload.session_id,
     model: payload.model,
+    interactionId: payload.interaction_id,
+    responseLatencyMs: payload.response_latency_ms ?? null,
   });
 }
 
@@ -607,7 +620,26 @@ function appendHistoricalLlmInteraction(interaction) {
     timestamp: interaction.timestamp,
     sessionId: interaction.session_id,
     model: interaction.model,
+    interactionId: interaction.id,
+    responseLatencyMs: interaction.response_latency_ms ?? null,
   });
+}
+
+function updateLlmReplyLatency(interactionId, responseLatencyMs) {
+  const message = llmThread.find(
+    (entry) => entry.thread === "llm" && entry.role === "assistant" && entry.interactionId === interactionId,
+  );
+  if (!message) {
+    return;
+  }
+
+  message.responseLatencyMs = responseLatencyMs;
+
+  const row = llmMessagesEl.querySelector(`.message[data-id="${CSS.escape(message.id)}"]`);
+  const meta = row?.querySelector(".message-meta");
+  if (meta) {
+    meta.textContent = createMetaText(message);
+  }
 }
 
 function getCurrentUserId() {
@@ -715,6 +747,7 @@ async function sendMessageToLlm(content) {
   askLlmButton.disabled = true;
   setLlmStatus("Waiting for local Ollama...");
   appendLlmPromptMessage(messageText);
+  const startedAt = performance.now();
 
   try {
     const response = await fetch("/api/llm/message", {
@@ -735,12 +768,19 @@ async function sendMessageToLlm(content) {
     }
 
     appendLlmReplyMessage(data);
+    const responseLatencyMs = Math.max(0, Math.round(performance.now() - startedAt));
+    updateLlmReplyLatency(data.interaction_id, responseLatencyMs);
+    try {
+      await persistLlmLatency(sessionId, data.interaction_id, responseLatencyMs);
+    } catch (error) {
+      setLlmStatus(error.message || "LLM replied, but latency could not be saved");
+    }
     updateLlmContext({
       retrievalMode: data.retrieval_mode,
       activeDocumentTitle: data.active_document_title,
       activeDocumentId: data.active_document_id,
     });
-    setLlmStatus(`LLM replied using ${data.model}`);
+    setLlmStatus(`LLM replied using ${data.model} in ${formatLatencyLabel(responseLatencyMs)}`);
     return true;
   } catch (error) {
     appendMessageToThread({
@@ -759,6 +799,25 @@ async function sendMessageToLlm(content) {
     return false;
   } finally {
     askLlmButton.disabled = false;
+  }
+}
+
+async function persistLlmLatency(sessionId, interactionId, responseLatencyMs) {
+  const response = await fetch("/api/llm/latency", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      session_id: sessionId,
+      interaction_id: interactionId,
+      response_latency_ms: responseLatencyMs,
+    }),
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || "Unable to save LLM latency");
   }
 }
 

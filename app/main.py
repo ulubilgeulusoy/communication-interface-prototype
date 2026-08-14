@@ -24,6 +24,7 @@ from .db import (
     mark_delivered,
     sanitize_session_id,
     set_session_delay_ms,
+    update_llm_interaction_latency,
     utc_now_iso,
 )
 from .experiment import assign_condition
@@ -57,11 +58,13 @@ class LLMRequest(BaseModel):
 
 
 class LLMReply(BaseModel):
+    interaction_id: int
     session_id: str
     user_id: str
     model: str
     output_text: str
     timestamp: str
+    response_latency_ms: int | None = None
     retrieved_chunks: list[dict] = Field(default_factory=list)
     used_retrieval: bool = False
     retrieval_mode: str = "global"
@@ -85,6 +88,12 @@ class SessionHistory(BaseModel):
 class DelaySettings(BaseModel):
     session_id: str = Field(min_length=1)
     delay_ms: int = Field(default=0, ge=0, le=600000)
+
+
+class LLMLatencyUpdate(BaseModel):
+    session_id: str = Field(min_length=1)
+    interaction_id: int = Field(ge=1)
+    response_latency_ms: int = Field(ge=0, le=3600000)
 
 
 class RAGReindexReply(BaseModel):
@@ -587,7 +596,7 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
         for chunk in rag_reply.retrieved_chunks
     ]
 
-    log_llm_interaction(
+    interaction_id = log_llm_interaction(
         timestamp=timestamp,
         session_id=safe_session_id,
         user_id=payload.user_id,
@@ -621,11 +630,13 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
     llm_context_manager.set(safe_session_id, payload.user_id, current_state)
 
     return LLMReply(
+        interaction_id=interaction_id,
         session_id=safe_session_id,
         user_id=payload.user_id,
         model=rag_reply.llm_response.model,
         output_text=rag_reply.llm_response.output_text,
         timestamp=timestamp,
+        response_latency_ms=None,
         retrieved_chunks=retrieved_chunks_payload,
         used_retrieval=rag_reply.used_retrieval,
         retrieval_mode=current_state.retrieval_mode,
@@ -656,6 +667,21 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
             else None
         ),
     )
+
+
+@app.post("/api/llm/latency")
+def update_llm_latency(payload: LLMLatencyUpdate) -> dict[str, int | str]:
+    safe_session_id = sanitize_session_id(payload.session_id)
+    update_llm_interaction_latency(
+        session_id=safe_session_id,
+        interaction_id=payload.interaction_id,
+        response_latency_ms=payload.response_latency_ms,
+    )
+    return {
+        "session_id": safe_session_id,
+        "interaction_id": payload.interaction_id,
+        "response_latency_ms": payload.response_latency_ms,
+    }
 
 
 @app.post("/api/rag/reindex", response_model=RAGReindexReply)
