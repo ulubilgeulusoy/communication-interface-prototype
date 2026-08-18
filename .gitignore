@@ -52,3 +52,6 @@ knowledge_base/**
 vector_store/**
 !vector_store/
 !vector_store/.gitkeep
+
+# Uploaded user attachments
+uploads/

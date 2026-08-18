@@ -54,9 +54,7 @@
             <div>
               <h2>User Chat</h2>
             </div>
-            <p class="thread-note">
-              Click to select. Right-click a message or selection to send it to the other window.
-            </p>
+            
           </div>
 
           <div id="user-messages" class="messages" aria-live="polite"></div>
@@ -78,7 +76,16 @@
               class="composer-textarea"
               placeholder="Type a message for the other user"
             ></textarea>
-            <button type="submit">Send to User</button>
+            <div class="composer-row composer-row-secondary">
+              <button type="submit">Send to User</button>
+              <div class="attachment-stack">
+                <label class="compact-label">
+                  Attach files
+                  <input id="message-attachments" name="attachments" type="file" multiple />
+                </label>
+                <div id="message-attachments-status" class="attachment-status">No attachments selected</div>
+              </div>
+            </div>
           </form>
         </section>
 
@@ -88,7 +95,6 @@
               <h2>LLM Chat</h2>
             </div>
             <div class="thread-tools">
-              <p class="thread-note">The local model stays in its own thread and can receive forwarded messages.</p>
               <button type="button" id="reindex-button" class="ghost-button">Re-index Knowledge Base</button>
             </div>
           </div>

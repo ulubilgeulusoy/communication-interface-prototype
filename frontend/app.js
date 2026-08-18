@@ -7,6 +7,8 @@ const receiverInput = document.querySelector("#receiver-id");
 const sessionInput = document.querySelector("#session-id");
 const delayInput = document.querySelector("#delay-seconds");
 const contentInput = document.querySelector("#message-content");
+const attachmentInput = document.querySelector("#message-attachments");
+const attachmentStatusEl = document.querySelector("#message-attachments-status");
 const llmContentInput = document.querySelector("#llm-content");
 const statusLabel = document.querySelector("#connection-status");
 const delayStatusLabel = document.querySelector("#delay-status");
@@ -45,6 +47,7 @@ syncEmptyState(userMessagesEl, userThread);
 syncEmptyState(llmMessagesEl, llmThread);
 syncSelectionStatus();
 syncLlmContextDisplay();
+updateAttachmentSelectionStatus();
 
 function buildClientMessageId(prefix) {
   messageCounter += 1;
@@ -152,6 +155,38 @@ function normalizeMessageText(text) {
   return String(text || "").trim();
 }
 
+function getMessageAttachments() {
+  const formData = new FormData(messageForm);
+  return formData
+    .getAll("attachments")
+    .filter((value) => value instanceof File && value.size >= 0);
+}
+
+function formatFileSize(sizeBytes) {
+  const size = Math.max(0, Number(sizeBytes) || 0);
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function updateAttachmentSelectionStatus() {
+  const files = getMessageAttachments();
+  if (files.length === 0) {
+    const fallbackName = String(attachmentInput.value || "").split(/[/\\]/).pop();
+    attachmentStatusEl.textContent = fallbackName
+      ? `Selected: ${fallbackName}`
+      : "No attachments selected";
+    return;
+  }
+
+  const summary = files.map((file) => `${file.name} (${formatFileSize(file.size)})`).join(", ");
+  attachmentStatusEl.textContent = summary;
+}
+
 function joinMessagesForForward(messages) {
   return messages
     .map((message) => normalizeMessageText(message.body))
@@ -241,6 +276,10 @@ function updateUserMessageDelivery(payload) {
 }
 
 function buildMessageBody(message) {
+  if (message.thread === "user" && Array.isArray(message.attachments) && message.attachments.length > 0) {
+    return renderUserMessageBody(message);
+  }
+
   if (message.thread === "llm" && message.role === "assistant") {
     return renderRichMessageBody(message.body);
   }
@@ -249,6 +288,58 @@ function buildMessageBody(message) {
   body.className = "message-body message-body-plain";
   body.textContent = message.body;
   return body;
+}
+
+function renderUserMessageBody(message) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "message-body message-body-with-attachments";
+
+  if (message.body) {
+    const body = document.createElement("p");
+    body.className = "message-body message-body-plain";
+    body.textContent = message.body;
+    wrapper.append(body);
+  }
+
+  const attachmentsList = document.createElement("div");
+  attachmentsList.className = "attachment-list";
+  for (const attachment of message.attachments) {
+    attachmentsList.append(buildAttachmentCard(attachment));
+  }
+  wrapper.append(attachmentsList);
+  return wrapper;
+}
+
+function buildAttachmentCard(attachment) {
+  const card = document.createElement("div");
+  card.className = "attachment-card";
+
+  const isImage = String(attachment.content_type || "").startsWith("image/");
+  if (isImage && attachment.url) {
+    const preview = document.createElement("img");
+    preview.className = "attachment-preview";
+    preview.src = attachment.url;
+    preview.alt = attachment.name || "Attachment preview";
+    card.append(preview);
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "attachment-meta";
+
+  const link = document.createElement("a");
+  link.className = "attachment-link";
+  link.href = attachment.url || "#";
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.textContent = attachment.name || "Attachment";
+
+  const details = document.createElement("span");
+  details.className = "attachment-details";
+  details.textContent = `${attachment.content_type || "file"} • ${formatFileSize(attachment.size_bytes)}`;
+
+  meta.append(link, details);
+  card.append(meta);
+  return card;
 }
 
 function renderRichMessageBody(text) {
@@ -538,6 +629,7 @@ function appendUserThreadMessage(payload, direction) {
     sender: payload.sender,
     receiver: payload.receiver,
     body: normalizeMessageText(payload.content),
+    attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
     timestamp: payload.sent_timestamp,
     deliveredTimestamp: payload.delivered_timestamp ?? null,
     deliveryPending: Boolean(payload.delivery_pending),
@@ -555,6 +647,7 @@ function appendHistoricalUserMessage(message) {
     sender: message.sender,
     receiver: message.receiver,
     body: normalizeMessageText(message.content),
+    attachments: Array.isArray(message.attachments) ? message.attachments : [],
     timestamp: message.sent_timestamp,
     deliveredTimestamp: message.delivered_timestamp ?? null,
     deliveryPending: false,
@@ -710,7 +803,7 @@ function showContextMenu(event, thread) {
   contextMenuEl.style.top = `${event.clientY}px`;
 }
 
-function sendMessageToUser(content) {
+async function sendMessageToUser(content) {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     statusLabel.textContent = "Connect before sending";
     return false;
@@ -718,19 +811,33 @@ function sendMessageToUser(content) {
 
   const sessionId = sessionInput.value.trim();
   const cleanContent = normalizeMessageText(content);
-  if (!cleanContent || !sessionId) {
+  const attachments = getMessageAttachments();
+  if ((!cleanContent && attachments.length === 0) || !sessionId) {
     return false;
   }
 
-  socket.send(
-    JSON.stringify({
-      receiver: receiverInput.value,
-      content: cleanContent,
-      session_id: sessionId,
-      experimental_condition: currentCondition,
-    }),
-  );
+  const formData = new FormData();
+  formData.append("session_id", sessionId);
+  formData.append("sender", getCurrentUserId());
+  formData.append("receiver", receiverInput.value);
+  formData.append("content", cleanContent);
+  formData.append("experimental_condition", currentCondition || "");
+  for (const attachment of attachments) {
+    formData.append("attachments", attachment);
+  }
 
+  const response = await fetch("/api/messages/user", {
+    method: "POST",
+    body: formData,
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "Unable to send user message");
+  }
+
+  appendUserThreadMessage(data, "outgoing");
+  attachmentInput.value = "";
+  updateAttachmentSelectionStatus();
   return true;
 }
 
@@ -911,7 +1018,7 @@ async function forwardSelection(targetThread) {
   }
 
   if (targetThread === "user") {
-    const sent = sendMessageToUser(forwardedText);
+    const sent = await sendMessageToUser(forwardedText);
     if (sent) {
       setLlmStatus("Forwarded selected messages to the user chat");
     }
@@ -1071,16 +1178,22 @@ delayForm.addEventListener("submit", async (event) => {
   }
 });
 
-messageForm.addEventListener("submit", (event) => {
+messageForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  updateAttachmentSelectionStatus();
 
   const content = normalizeMessageText(contentInput.value);
-  if (!content) {
+  if (!content && getMessageAttachments().length === 0) {
     return;
   }
 
-  if (sendMessageToUser(content)) {
-    contentInput.value = "";
+  try {
+    const sent = await sendMessageToUser(content);
+    if (sent) {
+      contentInput.value = "";
+    }
+  } catch (error) {
+    statusLabel.textContent = error.message || "Unable to send message";
   }
 });
 
@@ -1187,4 +1300,12 @@ window.addEventListener("blur", () => {
 
 userInput.addEventListener("change", () => {
   receiverInput.value = userInput.value === "user_a" ? "user_b" : "user_a";
+});
+
+attachmentInput.addEventListener("change", () => {
+  updateAttachmentSelectionStatus();
+});
+
+attachmentInput.addEventListener("input", () => {
+  updateAttachmentSelectionStatus();
 });

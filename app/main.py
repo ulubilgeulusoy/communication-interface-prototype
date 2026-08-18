@@ -6,8 +6,10 @@ from functools import lru_cache
 from pathlib import Path
 import re
 from dataclasses import dataclass
+from uuid import uuid4
+from mimetypes import guess_type
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -41,6 +43,7 @@ from .rag.retrieval import DEFAULT_COLLECTION_NAME, DEFAULT_VECTOR_STORE_PATH, R
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "frontend"
+UPLOADS_DIR = BASE_DIR / "uploads"
 
 app = FastAPI(title="Two-User Communication Prototype")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -83,6 +86,21 @@ class SessionHistory(BaseModel):
     messages: list[dict]
     llm_interactions: list[dict]
     delay_ms: int = 0
+
+
+class UserMessageReply(BaseModel):
+    id: int
+    sender: str
+    receiver: str
+    content: str
+    attachments: list[dict] = Field(default_factory=list)
+    sent_timestamp: str
+    delivered_timestamp: str | None = None
+    session_id: str
+    experimental_condition: str
+    delay_ms: int = 0
+    delivered: bool = False
+    delivery_pending: bool = False
 
 
 class DelaySettings(BaseModel):
@@ -170,6 +188,54 @@ class LLMContextState:
     retrieval_mode: str = "global"
     active_document_title: str = ""
     active_document_id: str = ""
+
+
+def ensure_uploads_dir() -> None:
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def build_attachment_url(session_id: str, attachment_id: str) -> str:
+    return f"/api/attachments/{session_id}/{attachment_id}"
+
+
+def store_user_attachment(
+    *,
+    session_id: str,
+    upload: UploadFile,
+) -> dict:
+    ensure_uploads_dir()
+    session_dir = UPLOADS_DIR / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    original_name = Path(upload.filename or "attachment").name or "attachment"
+    attachment_id = uuid4().hex
+    suffix = Path(original_name).suffix
+    stored_name = f"{attachment_id}{suffix}"
+    stored_path = session_dir / stored_name
+    payload = upload.file.read()
+    stored_path.write_bytes(payload)
+
+    detected_type = upload.content_type or guess_type(original_name)[0] or "application/octet-stream"
+    return {
+        "id": attachment_id,
+        "name": original_name,
+        "stored_name": stored_name,
+        "content_type": detected_type,
+        "size_bytes": stored_path.stat().st_size,
+        "url": build_attachment_url(session_id, attachment_id),
+    }
+
+
+def resolve_attachment_path(session_id: str, attachment_id: str) -> Path:
+    session_dir = UPLOADS_DIR / session_id
+    if not session_dir.exists():
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    for candidate in session_dir.iterdir():
+        if candidate.is_file() and candidate.name.startswith(attachment_id):
+            return candidate
+
+    raise HTTPException(status_code=404, detail="Attachment not found")
 
 
 def build_conversation_history(session_id: str, limit: int = LLM_HISTORY_LIMIT) -> str:
@@ -435,6 +501,7 @@ async def deliver_message_with_delay(
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    ensure_uploads_dir()
 
 
 @app.get("/")
@@ -468,6 +535,13 @@ def get_session_history(session_id: str) -> SessionHistory:
     )
 
 
+@app.get("/api/attachments/{session_id}/{attachment_id}")
+def get_attachment(session_id: str, attachment_id: str) -> FileResponse:
+    safe_session_id = sanitize_session_id(session_id)
+    attachment_path = resolve_attachment_path(safe_session_id, attachment_id)
+    return FileResponse(attachment_path)
+
+
 @app.get("/api/session/{session_id}/delay", response_model=DelaySettings)
 def get_session_delay(session_id: str) -> DelaySettings:
     safe_session_id = sanitize_session_id(session_id)
@@ -483,6 +557,74 @@ def update_session_delay(payload: DelaySettings) -> DelaySettings:
     return DelaySettings(
         session_id=safe_session_id,
         delay_ms=set_session_delay_ms(safe_session_id, payload.delay_ms),
+    )
+
+
+@app.post("/api/messages/user", response_model=UserMessageReply)
+async def send_user_message(
+    session_id: str = Form(...),
+    sender: str = Form(...),
+    receiver: str = Form(...),
+    content: str = Form(""),
+    experimental_condition: str = Form(""),
+    attachments: list[UploadFile] | None = File(None),
+) -> UserMessageReply:
+    safe_session_id = sanitize_session_id(session_id)
+    clean_content = str(content).strip()
+    safe_sender = str(sender).strip()
+    safe_receiver = str(receiver).strip()
+    if not safe_sender or not safe_receiver:
+        raise HTTPException(status_code=400, detail="Sender and receiver are required")
+
+    stored_attachments = [
+        store_user_attachment(session_id=safe_session_id, upload=attachment)
+        for attachment in (attachments or [])
+        if attachment.filename
+    ]
+    if not clean_content and not stored_attachments:
+        raise HTTPException(status_code=400, detail="Message content or an attachment is required")
+
+    resolved_condition = str(experimental_condition or assign_condition(safe_session_id))
+    delay_ms = get_session_delay_ms(safe_session_id)
+    sent_timestamp = utc_now_iso()
+    message_id = log_message(
+        sender=safe_sender,
+        receiver=safe_receiver,
+        content=clean_content,
+        attachments=stored_attachments,
+        sent_timestamp=sent_timestamp,
+        delay_ms=delay_ms,
+        session_id=safe_session_id,
+        experimental_condition=resolved_condition,
+    )
+    message = {
+        "id": message_id,
+        "sender": safe_sender,
+        "receiver": safe_receiver,
+        "content": clean_content,
+        "attachments": stored_attachments,
+        "sent_timestamp": sent_timestamp,
+        "delivered_timestamp": None,
+        "session_id": safe_session_id,
+        "experimental_condition": resolved_condition,
+        "delay_ms": delay_ms,
+    }
+
+    asyncio.create_task(
+        deliver_message_with_delay(
+            sender=safe_sender,
+            receiver=safe_receiver,
+            session_id=safe_session_id,
+            message_id=message_id,
+            message=dict(message),
+            delay_ms=delay_ms,
+        )
+    )
+
+    return UserMessageReply(
+        delivered=False,
+        delivery_pending=True,
+        **message,
     )
 
 
@@ -729,6 +871,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
                 sender=user_id,
                 receiver=receiver,
                 content=content,
+                attachments=[],
                 sent_timestamp=sent_timestamp,
                 delay_ms=delay_ms,
                 session_id=session_id,
@@ -740,6 +883,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
                 "sender": user_id,
                 "receiver": receiver,
                 "content": content,
+                "attachments": [],
                 "sent_timestamp": sent_timestamp,
                 "delivered_timestamp": None,
                 "session_id": session_id,

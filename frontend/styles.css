@@ -456,6 +456,61 @@ h2 {
   color: #2d2115;
 }
 
+.message-body-with-attachments {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.attachment-status {
+  color: var(--muted);
+  font-size: 0.8rem;
+  min-height: 1.2rem;
+}
+
+.attachment-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.attachment-card {
+  background: rgba(255, 255, 255, 0.56);
+  border: 1px solid rgba(63, 54, 45, 0.12);
+  border-radius: 14px;
+  display: grid;
+  gap: 0.55rem;
+  overflow: hidden;
+  padding: 0.65rem;
+}
+
+.attachment-preview {
+  background: rgba(243, 239, 230, 0.85);
+  border-radius: 10px;
+  display: block;
+  max-height: 220px;
+  object-fit: cover;
+  width: 100%;
+}
+
+.attachment-meta {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.attachment-link {
+  color: var(--blue-deep);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.attachment-link:hover {
+  text-decoration: underline;
+}
+
+.attachment-details {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 .message.is-selected::after {
   align-items: center;
   background: linear-gradient(135deg, var(--accent), var(--accent-deep));
@@ -524,6 +579,22 @@ h2 {
 .compact-label,
 .composer-label-stack {
   align-self: stretch;
+}
+
+.composer > .composer-row-secondary {
+  grid-column: 1 / -1;
+}
+
+.composer-row-secondary {
+  align-items: end;
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: 160px minmax(0, 1fr);
+}
+
+.attachment-stack {
+  display: grid;
+  gap: 0.35rem;
 }
 
 .composer-label-stack {

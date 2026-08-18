@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,7 @@ def init_db(session_id: str | None = None) -> None:
                 sender TEXT NOT NULL,
                 receiver TEXT NOT NULL,
                 content TEXT NOT NULL,
+                attachments_json TEXT NOT NULL DEFAULT '[]',
                 sent_timestamp TEXT NOT NULL,
                 delivered_timestamp TEXT,
                 delay_ms INTEGER NOT NULL DEFAULT 0,
@@ -79,6 +81,12 @@ def init_db(session_id: str | None = None) -> None:
                 response_latency_ms INTEGER
             )
             """
+        )
+        _ensure_column(
+            conn,
+            table_name="messages",
+            column_name="attachments_json",
+            column_definition="TEXT NOT NULL DEFAULT '[]'",
         )
         _ensure_column(
             conn,
@@ -117,6 +125,7 @@ def log_message(
     sender: str,
     receiver: str,
     content: str,
+    attachments: list[dict[str, Any]] | None,
     sent_timestamp: str,
     delay_ms: int,
     session_id: str,
@@ -130,17 +139,19 @@ def log_message(
                 sender,
                 receiver,
                 content,
+                attachments_json,
                 sent_timestamp,
                 delay_ms,
                 session_id,
                 experimental_condition
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sender,
                 receiver,
                 content,
+                json.dumps(attachments or []),
                 sent_timestamp,
                 max(0, int(delay_ms)),
                 session_id,
@@ -190,7 +201,7 @@ def list_messages(session_id: str) -> list[dict[str, Any]]:
     init_db(session_id)
     with get_connection(session_id) as conn:
         rows = conn.execute("SELECT * FROM messages ORDER BY id ASC").fetchall()
-        return [dict(row) for row in rows]
+        return [_row_to_message(row) for row in rows]
 
 
 def list_recent_messages(session_id: str, limit: int = 12) -> list[dict[str, Any]]:
@@ -205,7 +216,7 @@ def list_recent_messages(session_id: str, limit: int = 12) -> list[dict[str, Any
             """,
             (limit,),
         ).fetchall()
-        return [dict(row) for row in reversed(rows)]
+        return [_row_to_message(row) for row in reversed(rows)]
 
 
 def log_llm_interaction(
@@ -312,3 +323,16 @@ def _ensure_column(
     conn.execute(
         f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"
     )
+
+
+def _row_to_message(row: sqlite3.Row) -> dict[str, Any]:
+    message = dict(row)
+    try:
+        parsed_attachments = json.loads(str(message.get("attachments_json") or "[]"))
+    except (TypeError, ValueError):
+        parsed_attachments = []
+
+    message["attachments"] = [
+        item for item in parsed_attachments if isinstance(item, dict)
+    ]
+    return message
