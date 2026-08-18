@@ -8,11 +8,11 @@ import re
 from dataclasses import dataclass
 from uuid import uuid4
 from mimetypes import guess_type
-
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from pypdf import PdfReader
 
 from .db import (
     get_session_delay_ms,
@@ -30,7 +30,7 @@ from .db import (
     utc_now_iso,
 )
 from .experiment import assign_condition
-from .llm_service import DEFAULT_MODEL, OllamaService, OllamaServiceError
+from .llm_service import DEFAULT_MODEL, LLMImageInput, OllamaService, OllamaServiceError, VISION_MODEL
 from .rag.embeddings import EmbeddingServiceError
 from .rag.index_knowledge import (
     KNOWLEDGE_BASE_PATH,
@@ -68,6 +68,7 @@ class LLMReply(BaseModel):
     output_text: str
     timestamp: str
     response_latency_ms: int | None = None
+    input_attachments: list[dict] = Field(default_factory=list)
     retrieved_chunks: list[dict] = Field(default_factory=list)
     used_retrieval: bool = False
     retrieval_mode: str = "global"
@@ -173,6 +174,13 @@ CLEAR_DOCUMENT_PHRASES = (
     "general knowledge only",
     "no manual",
 )
+VISION_FIRST_PATTERNS = (
+    re.compile(r"\bwhat do you see in this image\b", re.IGNORECASE),
+    re.compile(r"\bwhat is in this image\b", re.IGNORECASE),
+    re.compile(r"\bdescribe (this|the) (image|screenshot|photo)\b", re.IGNORECASE),
+    re.compile(r"\bread (this|the) (image|screenshot)\b", re.IGNORECASE),
+    re.compile(r"\bwhat does this (image|screenshot|photo) show\b", re.IGNORECASE),
+)
 
 
 @dataclass(frozen=True)
@@ -198,10 +206,11 @@ def build_attachment_url(session_id: str, attachment_id: str) -> str:
     return f"/api/attachments/{session_id}/{attachment_id}"
 
 
-def store_user_attachment(
+def store_attachment(
     *,
     session_id: str,
     upload: UploadFile,
+    thread: str,
 ) -> dict:
     ensure_uploads_dir()
     session_dir = UPLOADS_DIR / session_id
@@ -222,8 +231,25 @@ def store_user_attachment(
         "stored_name": stored_name,
         "content_type": detected_type,
         "size_bytes": stored_path.stat().st_size,
+        "thread": thread,
         "url": build_attachment_url(session_id, attachment_id),
     }
+
+
+def store_user_attachment(
+    *,
+    session_id: str,
+    upload: UploadFile,
+) -> dict:
+    return store_attachment(session_id=session_id, upload=upload, thread="user")
+
+
+def store_llm_attachment(
+    *,
+    session_id: str,
+    upload: UploadFile,
+) -> dict:
+    return store_attachment(session_id=session_id, upload=upload, thread="llm")
 
 
 def resolve_attachment_path(session_id: str, attachment_id: str) -> Path:
@@ -236,6 +262,94 @@ def resolve_attachment_path(session_id: str, attachment_id: str) -> Path:
             return candidate
 
     raise HTTPException(status_code=404, detail="Attachment not found")
+
+
+def extract_attachment_context(attachments: list[dict], session_id: str) -> str:
+    sections: list[str] = []
+    for attachment in attachments:
+        name = str(attachment.get("name") or "attachment")
+        content_type = str(attachment.get("content_type") or "")
+        attachment_id = str(attachment.get("id") or "")
+        if not attachment_id:
+            continue
+        attachment_path = resolve_attachment_path(session_id, attachment_id)
+        extracted_text = extract_text_from_attachment(attachment_path, content_type)
+        if extracted_text:
+            sections.append(f"File: {name}\n{extracted_text}")
+        else:
+            sections.append(
+                f"File: {name}\nNo extractable text was available. Use image input if supported or reason from metadata only."
+            )
+
+    return "\n\n".join(section[:8000] for section in sections if section.strip())
+
+
+def extract_text_from_attachment(attachment_path: Path, content_type: str) -> str:
+    lowered_type = content_type.lower()
+    suffix = attachment_path.suffix.lower()
+
+    if lowered_type == "application/pdf" or suffix == ".pdf":
+        try:
+            reader = PdfReader(str(attachment_path))
+            return "\n\n".join(
+                (page.extract_text() or "").strip()
+                for page in reader.pages
+            ).strip()
+        except Exception:
+            return ""
+
+    if lowered_type.startswith("text/") or suffix in {".txt", ".md", ".csv", ".json", ".py", ".log"}:
+        try:
+            return attachment_path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            return ""
+
+    return ""
+
+
+def build_image_inputs(attachments: list[dict], session_id: str) -> list[LLMImageInput]:
+    image_inputs: list[LLMImageInput] = []
+    for attachment in attachments:
+        content_type = str(attachment.get("content_type") or "")
+        if not content_type.startswith("image/"):
+            continue
+        attachment_id = str(attachment.get("id") or "")
+        if not attachment_id:
+            continue
+        attachment_path = resolve_attachment_path(session_id, attachment_id)
+        try:
+            raw_bytes = attachment_path.read_bytes()
+        except OSError:
+            continue
+        image_inputs.append(
+            LLMImageInput(
+                name=str(attachment.get("name") or attachment_path.name),
+                content_type=content_type,
+                base64_data=ollama_service.encode_image_bytes(raw_bytes),
+            )
+        )
+    return image_inputs
+
+
+def select_llm_model(
+    *,
+    requested_model: str | None,
+    image_inputs: list[LLMImageInput],
+) -> str | None:
+    if image_inputs:
+        return VISION_MODEL
+    return requested_model
+
+
+def is_vision_first_request(message_text: str, image_inputs: list[LLMImageInput]) -> bool:
+    if not image_inputs:
+        return False
+
+    normalized = " ".join(str(message_text).lower().split())
+    if not normalized:
+        return True
+
+    return any(pattern.search(normalized) for pattern in VISION_FIRST_PATTERNS)
 
 
 def build_conversation_history(session_id: str, limit: int = LLM_HISTORY_LIMIT) -> str:
@@ -670,18 +784,34 @@ def clear_llm_context(payload: LLMRequest) -> LLMContextReply:
     )
 
 
-@app.post("/api/llm/message", response_model=LLMReply)
-async def ask_llm(payload: LLMRequest) -> LLMReply:
-    safe_session_id = sanitize_session_id(payload.session_id)
+async def _run_llm_request(
+    *,
+    session_id: str,
+    user_id: str,
+    message_text: str,
+    model: str | None,
+    input_attachments: list[dict] | None = None,
+) -> LLMReply:
+    safe_session_id = sanitize_session_id(session_id)
+    cleaned_message_text = str(message_text).strip()
     timestamp = utc_now_iso()
     conversation_history = build_conversation_history(safe_session_id)
     llm_thread_history = build_llm_thread_history(
         safe_session_id,
-        user_id=payload.user_id,
+        user_id=user_id,
     )
-    current_state = llm_context_manager.get(safe_session_id, payload.user_id)
-    explicit_clear = should_clear_document_context(payload.message_text)
-    explicit_document = resolve_document_reference(payload.message_text)
+    current_state = llm_context_manager.get(safe_session_id, user_id)
+    effective_message_text = cleaned_message_text or "Analyze the attached files and answer the user's request."
+    explicit_clear = should_clear_document_context(effective_message_text)
+    explicit_document = resolve_document_reference(effective_message_text)
+    attachments_payload = input_attachments or []
+    attachment_context = extract_attachment_context(attachments_payload, safe_session_id)
+    image_inputs = build_image_inputs(attachments_payload, safe_session_id)
+    vision_focus = is_vision_first_request(effective_message_text, image_inputs)
+    selected_model = select_llm_model(
+        requested_model=model,
+        image_inputs=image_inputs,
+    )
 
     if explicit_clear:
         current_state = LLMContextState(
@@ -698,7 +828,7 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
     elif not current_state.active_document_title and not current_state.active_document_id:
         inferred_title, inferred_document_id = infer_active_document_context(
             safe_session_id,
-            user_id=payload.user_id,
+            user_id=user_id,
         )
         current_state = LLMContextState(
             retrieval_mode="document" if inferred_document_id else "global",
@@ -706,18 +836,21 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
             active_document_id=inferred_document_id,
         )
 
-    llm_context_manager.set(safe_session_id, payload.user_id, current_state)
+    llm_context_manager.set(safe_session_id, user_id, current_state)
 
     try:
         rag_reply = await rag_service.generate_reply(
-            message_text=payload.message_text,
+            message_text=effective_message_text,
             session_id=safe_session_id,
             conversation_history=conversation_history,
             llm_thread_history=llm_thread_history,
+            attachment_context=attachment_context,
+            images=image_inputs,
+            vision_focus=vision_focus,
             active_document_hint=current_state.active_document_title,
             active_document_id=current_state.active_document_id,
             retrieval_mode=current_state.retrieval_mode,
-            model=payload.model,
+            model=selected_model,
         )
     except OllamaServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -741,9 +874,10 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
     interaction_id = log_llm_interaction(
         timestamp=timestamp,
         session_id=safe_session_id,
-        user_id=payload.user_id,
-        model=rag_reply.llm_response.model or payload.model or DEFAULT_MODEL,
-        input_text=payload.message_text,
+        user_id=user_id,
+        model=rag_reply.llm_response.model or selected_model or DEFAULT_MODEL,
+        input_text=cleaned_message_text,
+        input_attachments=attachments_payload,
         output_text=rag_reply.llm_response.output_text,
         retrieved_sources_json=json.dumps(retrieved_chunks_payload),
     )
@@ -769,16 +903,17 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
             active_document_id="",
         )
 
-    llm_context_manager.set(safe_session_id, payload.user_id, current_state)
+    llm_context_manager.set(safe_session_id, user_id, current_state)
 
     return LLMReply(
         interaction_id=interaction_id,
         session_id=safe_session_id,
-        user_id=payload.user_id,
+        user_id=user_id,
         model=rag_reply.llm_response.model,
         output_text=rag_reply.llm_response.output_text,
         timestamp=timestamp,
         response_latency_ms=None,
+        input_attachments=attachments_payload,
         retrieved_chunks=retrieved_chunks_payload,
         used_retrieval=rag_reply.used_retrieval,
         retrieval_mode=current_state.retrieval_mode,
@@ -808,6 +943,42 @@ async def ask_llm(payload: LLMRequest) -> LLMReply:
             if rag_reply.retrieval_diagnostics
             else None
         ),
+    )
+
+
+@app.post("/api/llm/message", response_model=LLMReply)
+async def ask_llm(payload: LLMRequest) -> LLMReply:
+    return await _run_llm_request(
+        session_id=payload.session_id,
+        user_id=payload.user_id,
+        message_text=payload.message_text,
+        model=payload.model,
+        input_attachments=[],
+    )
+
+
+@app.post("/api/llm/message-upload", response_model=LLMReply)
+async def ask_llm_with_attachments(
+    session_id: str = Form(...),
+    user_id: str = Form(...),
+    message_text: str = Form(""),
+    model: str | None = Form(None),
+    attachments: list[UploadFile] | None = File(None),
+) -> LLMReply:
+    safe_session_id = sanitize_session_id(session_id)
+    stored_attachments = [
+        store_llm_attachment(session_id=safe_session_id, upload=attachment)
+        for attachment in (attachments or [])
+        if attachment.filename
+    ]
+    if not str(message_text).strip() and not stored_attachments:
+        raise HTTPException(status_code=400, detail="Message text or an attachment is required")
+    return await _run_llm_request(
+        session_id=safe_session_id,
+        user_id=user_id,
+        message_text=message_text,
+        model=model,
+        input_attachments=stored_attachments,
     )
 
 

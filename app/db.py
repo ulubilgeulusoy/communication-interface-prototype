@@ -76,6 +76,7 @@ def init_db(session_id: str | None = None) -> None:
                 user_id TEXT NOT NULL,
                 model TEXT NOT NULL,
                 input_text TEXT NOT NULL,
+                input_attachments_json TEXT NOT NULL DEFAULT '[]',
                 output_text TEXT NOT NULL,
                 retrieved_sources_json TEXT,
                 response_latency_ms INTEGER
@@ -93,6 +94,12 @@ def init_db(session_id: str | None = None) -> None:
             table_name="messages",
             column_name="delay_ms",
             column_definition="INTEGER NOT NULL DEFAULT 0",
+        )
+        _ensure_column(
+            conn,
+            table_name="llm_interactions",
+            column_name="input_attachments_json",
+            column_definition="TEXT NOT NULL DEFAULT '[]'",
         )
         _ensure_column(
             conn,
@@ -226,6 +233,7 @@ def log_llm_interaction(
     user_id: str,
     model: str,
     input_text: str,
+    input_attachments: list[dict[str, Any]] | None = None,
     output_text: str,
     retrieved_sources_json: str | None = None,
     response_latency_ms: int | None = None,
@@ -240,11 +248,12 @@ def log_llm_interaction(
                 user_id,
                 model,
                 input_text,
+                input_attachments_json,
                 output_text,
                 retrieved_sources_json,
                 response_latency_ms
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 timestamp,
@@ -252,6 +261,7 @@ def log_llm_interaction(
                 user_id,
                 model,
                 input_text,
+                json.dumps(input_attachments or []),
                 output_text,
                 retrieved_sources_json,
                 response_latency_ms,
@@ -282,7 +292,7 @@ def list_llm_interactions(session_id: str) -> list[dict[str, Any]]:
     init_db(session_id)
     with get_connection(session_id) as conn:
         rows = conn.execute("SELECT * FROM llm_interactions ORDER BY id ASC").fetchall()
-        return [dict(row) for row in rows]
+        return [_row_to_llm_interaction(row) for row in rows]
 
 
 def list_recent_llm_interactions(
@@ -303,7 +313,7 @@ def list_recent_llm_interactions(
             """,
             (user_id, limit),
         ).fetchall()
-        return [dict(row) for row in reversed(rows)]
+        return [_row_to_llm_interaction(row) for row in reversed(rows)]
 
 
 def _ensure_column(
@@ -336,3 +346,18 @@ def _row_to_message(row: sqlite3.Row) -> dict[str, Any]:
         item for item in parsed_attachments if isinstance(item, dict)
     ]
     return message
+
+
+def _row_to_llm_interaction(row: sqlite3.Row) -> dict[str, Any]:
+    interaction = dict(row)
+    try:
+        parsed_attachments = json.loads(
+            str(interaction.get("input_attachments_json") or "[]")
+        )
+    except (TypeError, ValueError):
+        parsed_attachments = []
+
+    interaction["input_attachments"] = [
+        item for item in parsed_attachments if isinstance(item, dict)
+    ]
+    return interaction

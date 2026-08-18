@@ -576,6 +576,10 @@ h2 {
   grid-template-columns: 160px minmax(0, 1fr) auto;
 }
 
+.composer-llm {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .compact-label,
 .composer-label-stack {
   align-self: stretch;
@@ -595,6 +599,13 @@ h2 {
 .attachment-stack {
   display: grid;
   gap: 0.35rem;
+}
+
+.attachment-row {
+  align-items: end;
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .composer-label-stack {

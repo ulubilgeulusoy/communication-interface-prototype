@@ -79,10 +79,13 @@
             <div class="composer-row composer-row-secondary">
               <button type="submit">Send to User</button>
               <div class="attachment-stack">
-                <label class="compact-label">
-                  Attach files
-                  <input id="message-attachments" name="attachments" type="file" multiple />
-                </label>
+                <div class="attachment-row">
+                  <label class="compact-label">
+                    Attach files
+                    <input id="message-attachments" name="attachments" type="file" multiple />
+                  </label>
+                  <button type="button" id="clear-message-attachments" class="ghost-button ghost-button-subtle">Remove</button>
+                </div>
                 <div id="message-attachments-status" class="attachment-status">No attachments selected</div>
               </div>
             </div>
@@ -112,17 +115,25 @@
             <span id="llm-status" class="llm-status"></span>
           </div>
 
-          <form id="llm-form" class="composer">
-            <div class="composer-label-stack">
-              <span class="compact-label-title">Model</span>
-              <span class="composer-model">Local Ollama</span>
-            </div>
+          <form id="llm-form" class="composer composer-llm">
             <textarea
               id="llm-content"
               class="composer-textarea"
               placeholder="Type a message for the LLM"
             ></textarea>
-            <button type="submit" id="ask-llm-button" class="secondary-button">Send to LLM</button>
+            <div class="composer-row composer-row-secondary">
+              <button type="submit" id="ask-llm-button" class="secondary-button">Send to LLM</button>
+              <div class="attachment-stack">
+                <div class="attachment-row">
+                  <label class="compact-label">
+                    Attach files
+                    <input id="llm-attachments" name="llm_attachments" type="file" multiple />
+                  </label>
+                  <button type="button" id="clear-llm-attachments" class="ghost-button ghost-button-subtle">Remove</button>
+                </div>
+                <div id="llm-attachments-status" class="attachment-status">No attachments selected</div>
+              </div>
+            </div>
           </form>
         </section>
       </section>

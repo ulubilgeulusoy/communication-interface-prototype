@@ -9,7 +9,11 @@ const delayInput = document.querySelector("#delay-seconds");
 const contentInput = document.querySelector("#message-content");
 const attachmentInput = document.querySelector("#message-attachments");
 const attachmentStatusEl = document.querySelector("#message-attachments-status");
+const clearMessageAttachmentsButton = document.querySelector("#clear-message-attachments");
 const llmContentInput = document.querySelector("#llm-content");
+const llmAttachmentInput = document.querySelector("#llm-attachments");
+const llmAttachmentStatusEl = document.querySelector("#llm-attachments-status");
+const clearLlmAttachmentsButton = document.querySelector("#clear-llm-attachments");
 const statusLabel = document.querySelector("#connection-status");
 const delayStatusLabel = document.querySelector("#delay-status");
 const userMessagesEl = document.querySelector("#user-messages");
@@ -48,6 +52,7 @@ syncEmptyState(llmMessagesEl, llmThread);
 syncSelectionStatus();
 syncLlmContextDisplay();
 updateAttachmentSelectionStatus();
+updateLlmAttachmentSelectionStatus();
 
 function buildClientMessageId(prefix) {
   messageCounter += 1;
@@ -155,11 +160,19 @@ function normalizeMessageText(text) {
   return String(text || "").trim();
 }
 
-function getMessageAttachments() {
-  const formData = new FormData(messageForm);
+function getFormAttachments(formEl, fieldName) {
+  const formData = new FormData(formEl);
   return formData
-    .getAll("attachments")
+    .getAll(fieldName)
     .filter((value) => value instanceof File && value.size >= 0);
+}
+
+function getMessageAttachments() {
+  return getFormAttachments(messageForm, "attachments");
+}
+
+function getLlmAttachments() {
+  return getFormAttachments(llmForm, "llm_attachments");
 }
 
 function formatFileSize(sizeBytes) {
@@ -180,11 +193,34 @@ function updateAttachmentSelectionStatus() {
     attachmentStatusEl.textContent = fallbackName
       ? `Selected: ${fallbackName}`
       : "No attachments selected";
+    clearMessageAttachmentsButton.disabled = !fallbackName;
     return;
   }
 
   const summary = files.map((file) => `${file.name} (${formatFileSize(file.size)})`).join(", ");
   attachmentStatusEl.textContent = summary;
+  clearMessageAttachmentsButton.disabled = false;
+}
+
+function updateLlmAttachmentSelectionStatus() {
+  const files = getLlmAttachments();
+  if (files.length === 0) {
+    const fallbackName = String(llmAttachmentInput.value || "").split(/[/\\]/).pop();
+    llmAttachmentStatusEl.textContent = fallbackName
+      ? `Selected: ${fallbackName}`
+      : "No attachments selected";
+    clearLlmAttachmentsButton.disabled = !fallbackName;
+    return;
+  }
+
+  const summary = files.map((file) => `${file.name} (${formatFileSize(file.size)})`).join(", ");
+  llmAttachmentStatusEl.textContent = summary;
+  clearLlmAttachmentsButton.disabled = false;
+}
+
+function clearSelectedAttachments(inputEl, updateStatus) {
+  inputEl.value = "";
+  updateStatus();
 }
 
 function joinMessagesForForward(messages) {
@@ -277,6 +313,10 @@ function updateUserMessageDelivery(payload) {
 
 function buildMessageBody(message) {
   if (message.thread === "user" && Array.isArray(message.attachments) && message.attachments.length > 0) {
+    return renderUserMessageBody(message);
+  }
+
+  if (message.thread === "llm" && message.role === "user" && Array.isArray(message.attachments) && message.attachments.length > 0) {
     return renderUserMessageBody(message);
   }
 
@@ -656,7 +696,7 @@ function appendHistoricalUserMessage(message) {
   });
 }
 
-function appendLlmPromptMessage(text) {
+function appendLlmPromptMessage(text, attachments = []) {
   appendMessageToThread({
     id: buildClientMessageId("llm-user"),
     thread: "llm",
@@ -665,6 +705,7 @@ function appendLlmPromptMessage(text) {
     sender: userInput.value,
     receiver: "llm",
     body: normalizeMessageText(text),
+    attachments,
     timestamp: new Date().toISOString(),
     sessionId: sessionInput.value.trim(),
     model: "prompt",
@@ -697,6 +738,7 @@ function appendHistoricalLlmInteraction(interaction) {
     sender: interaction.user_id,
     receiver: "llm",
     body: normalizeMessageText(interaction.input_text),
+    attachments: Array.isArray(interaction.input_attachments) ? interaction.input_attachments : [],
     timestamp: interaction.timestamp,
     sessionId: interaction.session_id,
     model: "prompt",
@@ -845,33 +887,63 @@ async function sendMessageToLlm(content) {
   const messageText = normalizeMessageText(content);
   const sessionId = sessionInput.value.trim();
   const userId = userInput.value;
+  const attachments = getLlmAttachments();
 
-  if (!messageText || !sessionId || !userId) {
+  if ((!messageText && attachments.length === 0) || !sessionId || !userId) {
     setLlmStatus("Enter a session ID and a prompt first");
     return false;
   }
 
   askLlmButton.disabled = true;
   setLlmStatus("Waiting for local Ollama...");
-  appendLlmPromptMessage(messageText);
+  appendLlmPromptMessage(messageText, attachments.map((file) => ({
+    name: file.name,
+    content_type: file.type || "application/octet-stream",
+    size_bytes: file.size,
+  })));
   const startedAt = performance.now();
 
   try {
-    const response = await fetch("/api/llm/message", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        session_id: sessionId,
-        user_id: userId,
-        message_text: messageText,
-      }),
-    });
+    let response;
+    if (attachments.length > 0) {
+      const formData = new FormData();
+      formData.append("session_id", sessionId);
+      formData.append("user_id", userId);
+      formData.append("message_text", messageText || "Analyze the attached files.");
+      for (const attachment of attachments) {
+        formData.append("attachments", attachment);
+      }
+      response = await fetch("/api/llm/message-upload", {
+        method: "POST",
+        body: formData,
+      });
+    } else {
+      response = await fetch("/api/llm/message", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          session_id: sessionId,
+          user_id: userId,
+          message_text: messageText,
+        }),
+      });
+    }
 
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.detail || "LLM request failed");
+    }
+
+    const promptMessage = llmThread.at(-1);
+    if (promptMessage && promptMessage.thread === "llm" && promptMessage.role === "user") {
+      promptMessage.attachments = Array.isArray(data.input_attachments) ? data.input_attachments : promptMessage.attachments;
+      const row = llmMessagesEl.querySelector(`.message[data-id="${CSS.escape(promptMessage.id)}"]`);
+      const body = row?.querySelector(".message-body, .message-body-with-attachments");
+      if (row && body) {
+        body.replaceWith(buildMessageBody(promptMessage));
+      }
     }
 
     appendLlmReplyMessage(data);
@@ -888,6 +960,8 @@ async function sendMessageToLlm(content) {
       activeDocumentId: data.active_document_id,
     });
     setLlmStatus(`LLM replied using ${data.model} in ${formatLatencyLabel(responseLatencyMs)}`);
+    llmAttachmentInput.value = "";
+    updateLlmAttachmentSelectionStatus();
     return true;
   } catch (error) {
     appendMessageToThread({
@@ -1201,7 +1275,8 @@ llmForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const content = normalizeMessageText(llmContentInput.value);
-  if (!content) {
+  updateLlmAttachmentSelectionStatus();
+  if (!content && getLlmAttachments().length === 0) {
     return;
   }
 
@@ -1308,4 +1383,20 @@ attachmentInput.addEventListener("change", () => {
 
 attachmentInput.addEventListener("input", () => {
   updateAttachmentSelectionStatus();
+});
+
+clearMessageAttachmentsButton.addEventListener("click", () => {
+  clearSelectedAttachments(attachmentInput, updateAttachmentSelectionStatus);
+});
+
+llmAttachmentInput.addEventListener("change", () => {
+  updateLlmAttachmentSelectionStatus();
+});
+
+llmAttachmentInput.addEventListener("input", () => {
+  updateLlmAttachmentSelectionStatus();
+});
+
+clearLlmAttachmentsButton.addEventListener("click", () => {
+  clearSelectedAttachments(llmAttachmentInput, updateLlmAttachmentSelectionStatus);
 });

@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 
 from ..llm_service import LLMResponse, OllamaService
+from ..llm_service import LLMImageInput
 from .embeddings import (
     DEFAULT_EMBEDDING_MODEL,
     EmbeddingServiceError,
@@ -106,6 +107,9 @@ class RAGService:
         session_id: str,
         conversation_history: str = "",
         llm_thread_history: str = "",
+        attachment_context: str = "",
+        images: list[LLMImageInput] | None = None,
+        vision_focus: bool = False,
         active_document_hint: str = "",
         active_document_id: str = "",
         retrieval_mode: str = "global",
@@ -124,6 +128,9 @@ class RAGService:
                 message_text=cleaned_message,
                 conversation_history=conversation_history,
                 llm_thread_history=llm_thread_history,
+                attachment_context=attachment_context,
+                images=images,
+                vision_focus=vision_focus,
                 model=model,
                 system_prompt=system_prompt,
             )
@@ -159,6 +166,9 @@ class RAGService:
                 message_text=cleaned_message,
                 conversation_history=conversation_history,
                 llm_thread_history=llm_thread_history,
+                attachment_context=attachment_context,
+                images=images,
+                vision_focus=vision_focus,
                 model=model,
                 system_prompt=system_prompt,
             )
@@ -175,6 +185,9 @@ class RAGService:
                 message_text=cleaned_message,
                 conversation_history=conversation_history,
                 llm_thread_history=llm_thread_history,
+                attachment_context=attachment_context,
+                images=images,
+                vision_focus=vision_focus,
                 model=model,
                 system_prompt=system_prompt,
             )
@@ -196,6 +209,9 @@ class RAGService:
             message_text=augmented_message,
             conversation_history=conversation_history,
             llm_thread_history=llm_thread_history,
+            attachment_context=attachment_context,
+            images=images,
+            vision_focus=vision_focus,
             model=model,
             system_prompt=selected_system_prompt,
         )
