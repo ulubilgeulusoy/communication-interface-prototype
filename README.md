@@ -1,17 +1,21 @@
 # Tailscale Communication Interface Prototype
 
-Minimal two-user communication web app for prototyping real-time interaction over a Tailscale tailnet. It uses a FastAPI backend, WebSocket messaging, a plain HTML/JavaScript frontend, per-session SQLite storage, and optional local Ollama-backed LLM replies.
+Two-user communication web app for prototyping real-time interaction over a Tailscale tailnet. It uses a FastAPI backend, WebSocket messaging plus multipart upload endpoints, a plain HTML/JavaScript frontend, per-session SQLite storage, and local Ollama-backed LLM replies with optional image/file attachments.
 
 ## Features
 
 - Two browser clients can connect as `user_a` and `user_b`.
-- Messages are sent over WebSockets in real time.
+- User chat messages are delivered in real time and support optional file/image attachments.
 - Each session is stored in its own SQLite file and can be reopened by using the same session ID.
 - User chat and LLM chat are shown in separate side-by-side panes.
+- Both `User Chat` and `LLM Chat` support selecting, previewing, and removing attachments before send.
 - Messages can be multi-selected and forwarded between the user chat and LLM chat.
 - Message timing includes sent, delivered, and client-side received status in the UI.
 - A separate backend LLM service can query local Ollama at `http://127.0.0.1:11434`.
-- LLM interactions are logged alongside each session with timestamp, user, model, prompt, and response.
+- LLM chat supports image analysis with automatic routing to `llama3.2-vision:11b` when an image is attached.
+- PDF and text-like attachments are text-extracted by the backend and included in the LLM prompt context.
+- Vision-first prompts such as "what do you see in this image?" use reduced prior LLM history to avoid unrelated context bleed.
+- LLM interactions are logged alongside each session with timestamp, user, model, prompt, response, and input attachment metadata.
 - Frontend, backend, and experimental condition assignment are kept in separate modules.
 
 ## Project Structure
@@ -26,6 +30,7 @@ frontend/
   index.html       Browser UI
   app.js           WebSocket client behavior
   styles.css       UI styling
+uploads/           Runtime attachment storage (created locally, gitignored)
 requirements.txt
 README.md
 ```
@@ -38,10 +43,11 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Install and run Ollama locally, then pull the default model:
+Install and run Ollama locally, then pull the required models:
 
 ```powershell
 ollama pull gpt-oss:20b
+ollama pull llama3.2-vision:11b
 ollama pull nomic-embed-text
 ollama serve
 ```
@@ -111,13 +117,13 @@ curl http://127.0.0.1:11434/api/tags
 
 If you get JSON back, Ollama is up.
 
-5. Check whether `gpt-oss:20b` is available:
+5. Check whether the required Ollama models are available:
 
 ```powershell
 ollama list
 ```
 
-You should see both `gpt-oss:20b` and `nomic-embed-text` in the model list.
+You should see `gpt-oss:20b`, `llama3.2-vision:11b`, and `nomic-embed-text` in the model list.
 
 6. If `curl` in step 4 fails, start Ollama in a separate VS Code terminal:
 
@@ -156,15 +162,19 @@ http://127.0.0.1:8000
 
 11. Test normal chat by sending a message between the two users.
 
-12. Test the LLM path by entering a prompt in the `LLM Chat` pane and clicking `Send to LLM`.
+12. Test user-chat attachments by attaching a file or image, sending it, and reloading the session.
 
-13. If you want to confirm the app is listening on port `8000`:
+13. Test the LLM path by entering a prompt in the `LLM Chat` pane and clicking `Send to LLM`.
+
+14. Test image analysis in `LLM Chat` by attaching an image and asking a direct vision prompt such as `What do you see in this image?`
+
+15. If you want to confirm the app is listening on port `8000`:
 
 ```powershell
 ss -ltnp | grep 8000
 ```
 
-14. If you want to confirm Ollama is listening on port `11434`:
+16. If you want to confirm Ollama is listening on port `11434`:
 
 ```powershell
 ss -ltnp | grep 11434
@@ -172,37 +182,39 @@ ss -ltnp | grep 11434
 
 `ollama ps` only shows active model processes. An empty table there does not mean the Ollama server is down.
 
-15. If you want to share the app over Tailscale, open another VS Code terminal and check that Tailscale is connected:
+17. If you want to share the app over Tailscale, open another VS Code terminal and check that Tailscale is connected:
 
 ```powershell
 tailscale status
 ```
 
-16. Serve the app over Tailscale:
+18. Serve the app over Tailscale:
 
 ```powershell
 tailscale serve 8000
 ```
 
-17. Confirm what Tailscale is serving:
+19. Confirm what Tailscale is serving:
 
 ```powershell
 tailscale serve status
 ```
 
-18. Open the local URL above, or open the HTTPS tailnet URL printed by `tailscale serve`.
+20. Open the local URL above, or open the HTTPS tailnet URL printed by `tailscale serve`.
 
 ## Session Behavior
 
-Each session ID maps to its own SQLite file under `sessions/`. If you reconnect later with the same session ID, the app reloads both the user chat history and the LLM chat history and continues from there.
+Each session ID maps to its own SQLite file under `sessions/`. If you reconnect later with the same session ID, the app reloads both the user chat history and the LLM chat history and continues from there, including attachment metadata for stored messages and LLM prompts.
 
 ## Ask The Local LLM
 
-The normal WebSocket chat between `user_a` and `user_b` is unchanged. To query the local model instead, type into the `LLM Chat` pane and click `Send to LLM`.
+To query the local model, type into the `LLM Chat` pane and click `Send to LLM`. You can also attach files or images in the LLM pane.
 
 - Backend target: `http://127.0.0.1:11434`
-- Default model: `gpt-oss:20b`
+- Default text model: `gpt-oss:20b`
+- Vision model for image-backed prompts: `llama3.2-vision:11b`
 - Endpoint: `POST /api/llm/message`
+- Attachment endpoint: `POST /api/llm/message-upload`
 
 Example request body:
 
@@ -216,13 +228,30 @@ Example request body:
 
 If Ollama is down or the model is unavailable, the app returns a `503` response and the frontend shows the error instead of crashing.
 
+### Attachment Analysis Behavior
+
+- Image attachments are analyzed with `llama3.2-vision:11b`.
+- PDF attachments are read by the backend with `pypdf`; extracted text is then added to the prompt context for the LLM.
+- Text-like files such as `.txt`, `.md`, `.csv`, `.json`, `.py`, and `.log` are read by the backend and added to the prompt context.
+- Other binary file types are stored and displayed in the UI, but are not deeply analyzed yet.
+- For vision-first prompts such as `What do you see in this image?`, the backend reduces prior LLM thread history and adds an image-focused instruction to lower the risk of context bleed from earlier prompts.
+
+### Attachment Disclaimer
+
+Attachment support is still experimental and should be tested more thoroughly end to end. Analysis quality may vary by file type, extracted-text quality, Ollama version, and local model behavior. The current implementation is useful for prototyping, but it should not yet be treated as a finalized attachment-analysis pipeline.
+
+Attachments are also not yet part of a dedicated knowledge base or indexing pipeline. A future design decision is still needed on whether uploaded attachments should remain session-local only, be added to the existing retrieval/indexing flow, or be stored in a separate attachment-specific knowledge base.
+
 ## Index The Knowledge Base
 
 The RAG indexer uses a separate Ollama embedding model from the chat model.
 
-- Chat/generation model: `gpt-oss:20b`
+- Text chat/generation model: `gpt-oss:20b`
+- Vision/image model: `llama3.2-vision:11b`
 - Embedding model: `nomic-embed-text`
 - The UI also includes a `Re-index Knowledge Base` button in the `LLM Chat` panel for manual refreshes after you add or change files.
+
+At the moment, uploaded attachments are not automatically indexed into the RAG knowledge base.
 
 Index the local `knowledge_base/` files into `vector_store/` with:
 
@@ -280,6 +309,8 @@ http://127.0.0.1:8000/api/session/session-001/history
 ```
 
 Each session database also contains an `llm_interactions` table for model request/response logging.
+
+Uploaded attachment files are stored locally under `uploads/` and are ignored by git.
 
 ## Experimental Logic
 
