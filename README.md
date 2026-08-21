@@ -12,10 +12,10 @@ Two-user communication web app for prototyping real-time interaction over a Tail
 - Messages can be multi-selected and forwarded between the user chat and LLM chat.
 - Message timing includes sent, delivered, and client-side received status in the UI.
 - A separate backend LLM service can query local Ollama at `http://127.0.0.1:11434`.
-- LLM chat supports image analysis with automatic routing to `llama3.2-vision:11b` when an image is attached.
+- LLM chat uses `llama3.2-vision:11b` for structured image findings, then always uses `gpt-oss:20b` for the user-facing response.
 - PDF and text-like attachments are text-extracted by the backend and included in the LLM prompt context.
-- Vision-first prompts such as "what do you see in this image?" use reduced prior LLM history to avoid unrelated context bleed.
-- LLM interactions are logged alongside each session with timestamp, user, model, prompt, response, and input attachment metadata.
+- Image findings are combined with the original request for the same RAG/vector store and embedding workflow used by text requests.
+- LLM interactions log selected models, raw vision findings, retrieved sources, final response, and input attachment metadata.
 - Frontend, backend, and experimental condition assignment are kept in separate modules.
 
 ## Project Structure
@@ -212,7 +212,8 @@ To query the local model, type into the `LLM Chat` pane and click `Send to LLM`.
 
 - Backend target: `http://127.0.0.1:11434`
 - Default text model: `gpt-oss:20b`
-- Vision model for image-backed prompts: `llama3.2-vision:11b`
+- Vision findings model: `llama3.2-vision:11b`
+- Final user-facing model for every request: `gpt-oss:20b`
 - Endpoint: `POST /api/llm/message`
 - Attachment endpoint: `POST /api/llm/message-upload`
 
@@ -230,11 +231,12 @@ If Ollama is down or the model is unavailable, the app returns a `503` response 
 
 ### Attachment Analysis Behavior
 
-- Image attachments are analyzed with `llama3.2-vision:11b`.
+- Image attachments are analyzed by `llama3.2-vision:11b`, which returns structured visual findings only.
+- The original question, structured visual findings, retrieved knowledge, and conversation history are sent to `gpt-oss:20b`, which produces the only user-facing response.
 - PDF attachments are read by the backend with `pypdf`; extracted text is then added to the prompt context for the LLM.
 - Text-like files such as `.txt`, `.md`, `.csv`, `.json`, `.py`, and `.log` are read by the backend and added to the prompt context.
 - Other binary file types are stored and displayed in the UI, but are not deeply analyzed yet.
-- For vision-first prompts such as `What do you see in this image?`, the backend reduces prior LLM thread history and adds an image-focused instruction to lower the risk of context bleed from earlier prompts.
+- If the vision stage fails, the backend logs the failure and still asks `gpt-oss:20b` to respond using the original question and any available non-image context.
 
 ### Attachment Disclaimer
 

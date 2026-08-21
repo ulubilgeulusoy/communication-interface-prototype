@@ -79,6 +79,10 @@ def init_db(session_id: str | None = None) -> None:
                 input_attachments_json TEXT NOT NULL DEFAULT '[]',
                 output_text TEXT NOT NULL,
                 retrieved_sources_json TEXT,
+                retrieved_chunks_json TEXT,
+                selected_models_json TEXT NOT NULL DEFAULT '[]',
+                raw_vision_findings TEXT,
+                vision_error TEXT,
                 response_latency_ms INTEGER
             )
             """
@@ -105,6 +109,30 @@ def init_db(session_id: str | None = None) -> None:
             conn,
             table_name="llm_interactions",
             column_name="retrieved_sources_json",
+            column_definition="TEXT",
+        )
+        _ensure_column(
+            conn,
+            table_name="llm_interactions",
+            column_name="retrieved_chunks_json",
+            column_definition="TEXT",
+        )
+        _ensure_column(
+            conn,
+            table_name="llm_interactions",
+            column_name="selected_models_json",
+            column_definition="TEXT NOT NULL DEFAULT '[]'",
+        )
+        _ensure_column(
+            conn,
+            table_name="llm_interactions",
+            column_name="raw_vision_findings",
+            column_definition="TEXT",
+        )
+        _ensure_column(
+            conn,
+            table_name="llm_interactions",
+            column_name="vision_error",
             column_definition="TEXT",
         )
         _ensure_column(
@@ -236,6 +264,10 @@ def log_llm_interaction(
     input_attachments: list[dict[str, Any]] | None = None,
     output_text: str,
     retrieved_sources_json: str | None = None,
+    retrieved_chunks_json: str | None = None,
+    selected_models: list[str] | None = None,
+    raw_vision_findings: str | None = None,
+    vision_error: str | None = None,
     response_latency_ms: int | None = None,
 ) -> int:
     init_db(session_id)
@@ -251,9 +283,13 @@ def log_llm_interaction(
                 input_attachments_json,
                 output_text,
                 retrieved_sources_json,
+                retrieved_chunks_json,
+                selected_models_json,
+                raw_vision_findings,
+                vision_error,
                 response_latency_ms
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 timestamp,
@@ -264,6 +300,10 @@ def log_llm_interaction(
                 json.dumps(input_attachments or []),
                 output_text,
                 retrieved_sources_json,
+                retrieved_chunks_json,
+                json.dumps(selected_models or []),
+                raw_vision_findings,
+                vision_error,
                 response_latency_ms,
             ),
         )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from dataclasses import dataclass
 
 import httpx
@@ -19,11 +20,12 @@ DEFAULT_SYSTEM_PROMPT = (
     "request. Use that conversation context to maintain continuity, and answer "
     "clearly and concisely."
 )
-VISION_FOCUSED_SYSTEM_PROMPT = (
-    "You are analyzing an attached image or screenshot. "
-    "Describe only what is visible in the attached image and answer using the image as the primary source. "
-    "Do not infer the topic from previous conversation unless the user explicitly asks you to connect it. "
-    "If text is visible in the image, you may read and summarize that text, but avoid adding unrelated prior context."
+VISION_FINDINGS_SYSTEM_PROMPT = (
+    "You are a visual-analysis component. Analyze the attached image(s) only and "
+    "return valid JSON with exactly these keys: objects, visible_text, observations, "
+    "measurements_or_details, uncertainties. Each value must be an array of concise "
+    "strings. Do not answer the user's question, offer advice, or use markdown. "
+    "Do not infer facts that are not visible. Record uncertainty explicitly."
 )
 
 
@@ -42,6 +44,74 @@ class LLMImageInput:
     name: str
     content_type: str
     base64_data: str
+
+
+@dataclass(frozen=True)
+class VisionAnalysis:
+    model: str
+    raw_findings: str
+    findings: dict[str, list[str]]
+
+
+class VisionAnalysisService:
+    """Isolated image-analysis stage so vision backends can be swapped independently."""
+
+    def __init__(
+        self,
+        llm_service: "OllamaService",
+        *,
+        model: str = VISION_MODEL,
+        system_prompt: str = VISION_FINDINGS_SYSTEM_PROMPT,
+    ) -> None:
+        self.llm_service = llm_service
+        self.model = model
+        self.system_prompt = system_prompt
+
+    async def analyze(
+        self,
+        *,
+        original_question: str,
+        images: list[LLMImageInput],
+    ) -> VisionAnalysis:
+        response = await self.llm_service.generate_reply(
+            message_text=(
+                "Original user question (context only; do not answer it):\n"
+                f"{original_question}"
+            ),
+            images=images,
+            model=self.model,
+            system_prompt=self.system_prompt,
+        )
+        return VisionAnalysis(
+            model=response.model,
+            raw_findings=response.output_text,
+            findings=self._parse_findings(response.output_text),
+        )
+
+    @staticmethod
+    def _parse_findings(raw_findings: str) -> dict[str, list[str]]:
+        keys = (
+            "objects",
+            "visible_text",
+            "observations",
+            "measurements_or_details",
+            "uncertainties",
+        )
+        try:
+            parsed = json.loads(raw_findings)
+        except (TypeError, ValueError):
+            return {"observations": [raw_findings.strip()]} if raw_findings.strip() else {}
+        if not isinstance(parsed, dict):
+            return {"observations": [raw_findings.strip()]} if raw_findings.strip() else {}
+
+        findings: dict[str, list[str]] = {}
+        for key in keys:
+            value = parsed.get(key, [])
+            if isinstance(value, list):
+                findings[key] = [str(item).strip() for item in value if str(item).strip()]
+            elif str(value).strip():
+                findings[key] = [str(value).strip()]
+        return findings
 
 
 class OllamaService:
@@ -66,24 +136,21 @@ class OllamaService:
         llm_thread_history: str = "",
         attachment_context: str = "",
         images: list[LLMImageInput] | None = None,
-        vision_focus: bool = False,
         model: str | None = None,
         system_prompt: str | None = None,
     ) -> LLMResponse:
         selected_model = model or self.default_model
-        prompt = system_prompt or (
-            VISION_FOCUSED_SYSTEM_PROMPT if vision_focus else self.system_prompt
-        )
+        prompt = system_prompt or self.system_prompt
         user_messages = [
             self._build_user_message(
-                conversation_history="" if vision_focus else conversation_history,
-                llm_thread_history="" if vision_focus else llm_thread_history,
+                conversation_history=conversation_history,
+                llm_thread_history=llm_thread_history,
                 message_text=message_text,
                 attachment_context=attachment_context,
             ),
             self._build_user_message(
                 conversation_history="",
-                llm_thread_history="" if vision_focus else self._trim_text(
+                llm_thread_history=self._trim_text(
                     llm_thread_history,
                     MAX_LLM_THREAD_HISTORY_CHARS // 2,
                 ),

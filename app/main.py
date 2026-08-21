@@ -30,7 +30,13 @@ from .db import (
     utc_now_iso,
 )
 from .experiment import assign_condition
-from .llm_service import DEFAULT_MODEL, LLMImageInput, OllamaService, OllamaServiceError, VISION_MODEL
+from .llm_service import (
+    DEFAULT_MODEL,
+    LLMImageInput,
+    OllamaService,
+    OllamaServiceError,
+    VisionAnalysisService,
+)
 from .rag.embeddings import EmbeddingServiceError
 from .rag.index_knowledge import (
     KNOWLEDGE_BASE_PATH,
@@ -48,6 +54,7 @@ UPLOADS_DIR = BASE_DIR / "uploads"
 app = FastAPI(title="Two-User Communication Prototype")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 ollama_service = OllamaService()
+vision_analysis_service = VisionAnalysisService(ollama_service)
 rag_service = RAGService(ollama_service)
 LLM_HISTORY_LIMIT = 12
 LLM_THREAD_HISTORY_LIMIT = 4
@@ -174,15 +181,6 @@ CLEAR_DOCUMENT_PHRASES = (
     "general knowledge only",
     "no manual",
 )
-VISION_FIRST_PATTERNS = (
-    re.compile(r"\bwhat do you see in this image\b", re.IGNORECASE),
-    re.compile(r"\bwhat is in this image\b", re.IGNORECASE),
-    re.compile(r"\bdescribe (this|the) (image|screenshot|photo)\b", re.IGNORECASE),
-    re.compile(r"\bread (this|the) (image|screenshot)\b", re.IGNORECASE),
-    re.compile(r"\bwhat does this (image|screenshot|photo) show\b", re.IGNORECASE),
-)
-
-
 @dataclass(frozen=True)
 class DocumentRecord:
     document_id: str
@@ -329,27 +327,6 @@ def build_image_inputs(attachments: list[dict], session_id: str) -> list[LLMImag
             )
         )
     return image_inputs
-
-
-def select_llm_model(
-    *,
-    requested_model: str | None,
-    image_inputs: list[LLMImageInput],
-) -> str | None:
-    if image_inputs:
-        return VISION_MODEL
-    return requested_model
-
-
-def is_vision_first_request(message_text: str, image_inputs: list[LLMImageInput]) -> bool:
-    if not image_inputs:
-        return False
-
-    normalized = " ".join(str(message_text).lower().split())
-    if not normalized:
-        return True
-
-    return any(pattern.search(normalized) for pattern in VISION_FIRST_PATTERNS)
 
 
 def build_conversation_history(session_id: str, limit: int = LLM_HISTORY_LIMIT) -> str:
@@ -807,11 +784,22 @@ async def _run_llm_request(
     attachments_payload = input_attachments or []
     attachment_context = extract_attachment_context(attachments_payload, safe_session_id)
     image_inputs = build_image_inputs(attachments_payload, safe_session_id)
-    vision_focus = is_vision_first_request(effective_message_text, image_inputs)
-    selected_model = select_llm_model(
-        requested_model=model,
-        image_inputs=image_inputs,
-    )
+    selected_models = [DEFAULT_MODEL]
+    vision_findings: dict[str, list[str]] | None = None
+    raw_vision_findings: str | None = None
+    vision_error: str | None = None
+    if image_inputs:
+        selected_models.insert(0, vision_analysis_service.model)
+        try:
+            vision_analysis = await vision_analysis_service.analyze(
+                original_question=effective_message_text,
+                images=image_inputs,
+            )
+            vision_findings = vision_analysis.findings
+            raw_vision_findings = vision_analysis.raw_findings
+        except OllamaServiceError as exc:
+            # Continue with GPT-OSS so a temporary vision outage does not fail the request.
+            vision_error = str(exc)
 
     if explicit_clear:
         current_state = LLMContextState(
@@ -845,12 +833,11 @@ async def _run_llm_request(
             conversation_history=conversation_history,
             llm_thread_history=llm_thread_history,
             attachment_context=attachment_context,
-            images=image_inputs,
-            vision_focus=vision_focus,
+            vision_findings=vision_findings,
             active_document_hint=current_state.active_document_title,
             active_document_id=current_state.active_document_id,
             retrieval_mode=current_state.retrieval_mode,
-            model=selected_model,
+            model=DEFAULT_MODEL,
         )
     except OllamaServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -870,16 +857,27 @@ async def _run_llm_request(
         }
         for chunk in rag_reply.retrieved_chunks
     ]
+    retrieved_chunks_log_payload = [
+        {
+            **chunk_payload,
+            "text": chunk.text,
+        }
+        for chunk_payload, chunk in zip(retrieved_chunks_payload, rag_reply.retrieved_chunks)
+    ]
 
     interaction_id = log_llm_interaction(
         timestamp=timestamp,
         session_id=safe_session_id,
         user_id=user_id,
-        model=rag_reply.llm_response.model or selected_model or DEFAULT_MODEL,
+        model=rag_reply.llm_response.model or DEFAULT_MODEL,
         input_text=cleaned_message_text,
         input_attachments=attachments_payload,
         output_text=rag_reply.llm_response.output_text,
         retrieved_sources_json=json.dumps(retrieved_chunks_payload),
+        retrieved_chunks_json=json.dumps(retrieved_chunks_log_payload),
+        selected_models=selected_models,
+        raw_vision_findings=raw_vision_findings,
+        vision_error=vision_error,
     )
 
     if (

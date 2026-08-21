@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import json
 import re
 from functools import lru_cache
 
 from ..llm_service import LLMResponse, OllamaService
-from ..llm_service import LLMImageInput
 from .embeddings import (
     DEFAULT_EMBEDDING_MODEL,
     EmbeddingServiceError,
@@ -150,8 +150,7 @@ class RAGService:
         conversation_history: str = "",
         llm_thread_history: str = "",
         attachment_context: str = "",
-        images: list[LLMImageInput] | None = None,
-        vision_focus: bool = False,
+        vision_findings: dict[str, list[str]] | None = None,
         active_document_hint: str = "",
         active_document_id: str = "",
         retrieval_mode: str = "global",
@@ -161,32 +160,31 @@ class RAGService:
     ) -> RAGReply:
         """Run the full retrieval-augmented generation workflow."""
 
-        cleaned_message = str(message_text).strip()
-        if not cleaned_message:
+        original_question = str(message_text).strip()
+        if not original_question:
             raise RAGServiceError("User message cannot be empty.")
+        final_request = self._build_final_request(original_question, vision_findings)
 
         if retrieval_mode == "disabled":
             llm_response = await self.llm_service.generate_reply(
-                message_text=cleaned_message,
+                message_text=final_request,
                 conversation_history=conversation_history,
                 llm_thread_history=llm_thread_history,
                 attachment_context=attachment_context,
-                images=images,
-                vision_focus=vision_focus,
                 model=model,
                 system_prompt=system_prompt,
             )
             return RAGReply(
                 llm_response=llm_response,
                 retrieved_chunks=[],
-                augmented_message=cleaned_message,
+                augmented_message=final_request,
                 used_retrieval=False,
                 retrieval_diagnostics=None,
                 retrieval_reason="retrieval_disabled",
             )
 
         retrieval_message = self._rewrite_follow_up_query(
-            cleaned_message,
+            self._build_retrieval_query(original_question, vision_findings),
             active_document_hint=active_document_hint,
         )
         routed_document = self._route_document_by_intent(retrieval_message)
@@ -199,19 +197,17 @@ class RAGService:
         )
         if not domain_gate.allowed:
             llm_response = await self.llm_service.generate_reply(
-                message_text=cleaned_message,
+                message_text=final_request,
                 conversation_history=conversation_history,
                 llm_thread_history=llm_thread_history,
                 attachment_context=attachment_context,
-                images=images,
-                vision_focus=vision_focus,
                 model=model,
                 system_prompt=system_prompt,
             )
             return RAGReply(
                 llm_response=llm_response,
                 retrieved_chunks=[],
-                augmented_message=cleaned_message,
+                augmented_message=final_request,
                 used_retrieval=False,
                 retrieval_diagnostics=None,
                 retrieval_reason=domain_gate.reason,
@@ -235,12 +231,10 @@ class RAGService:
             retrieved_chunks = retrieval_result.chunks
         except (EmbeddingServiceError, RetrievalServiceError) as exc:
             llm_response = await self.llm_service.generate_reply(
-                message_text=cleaned_message,
+                message_text=final_request,
                 conversation_history=conversation_history,
                 llm_thread_history=llm_thread_history,
                 attachment_context=attachment_context,
-                images=images,
-                vision_focus=vision_focus,
                 model=model,
                 system_prompt=system_prompt,
             )
@@ -262,19 +256,17 @@ class RAGService:
         )
         if not retrieval_decision.use_retrieval:
             llm_response = await self.llm_service.generate_reply(
-                message_text=cleaned_message,
+                message_text=final_request,
                 conversation_history=conversation_history,
                 llm_thread_history=llm_thread_history,
                 attachment_context=attachment_context,
-                images=images,
-                vision_focus=vision_focus,
                 model=model,
                 system_prompt=system_prompt,
             )
             return RAGReply(
                 llm_response=llm_response,
                 retrieved_chunks=[],
-                augmented_message=cleaned_message,
+                augmented_message=final_request,
                 used_retrieval=False,
                 retrieval_diagnostics=retrieval_result.diagnostics,
                 retrieval_reason=retrieval_decision.reason,
@@ -284,12 +276,10 @@ class RAGService:
 
         if not retrieved_chunks:
             llm_response = await self.llm_service.generate_reply(
-                message_text=cleaned_message,
+                message_text=final_request,
                 conversation_history=conversation_history,
                 llm_thread_history=llm_thread_history,
                 attachment_context=attachment_context,
-                images=images,
-                vision_focus=vision_focus,
                 model=model,
                 system_prompt=system_prompt,
             )
@@ -305,7 +295,7 @@ class RAGService:
             )
 
         augmented_message = self._build_augmented_message(
-            message_text=retrieval_message,
+            message_text=final_request,
             retrieved_chunks=retrieved_chunks,
         )
         selected_system_prompt = self._build_system_prompt(system_prompt)
@@ -315,8 +305,6 @@ class RAGService:
             conversation_history=conversation_history,
             llm_thread_history=llm_thread_history,
             attachment_context=attachment_context,
-            images=images,
-            vision_focus=vision_focus,
             model=model,
             system_prompt=selected_system_prompt,
         )
@@ -330,6 +318,32 @@ class RAGService:
             retrieval_reason=retrieval_decision.reason,
             selected_document_id=retrieval_decision.selected_document_id,
             selected_document_title=retrieval_decision.selected_document_title,
+        )
+
+    @staticmethod
+    def _build_retrieval_query(
+        original_question: str,
+        vision_findings: dict[str, list[str]] | None,
+    ) -> str:
+        if not vision_findings:
+            return original_question
+        return (
+            f"Original user question:\n{original_question}\n\n"
+            f"Structured visual findings:\n{json.dumps(vision_findings, ensure_ascii=True)}"
+        )
+
+    @staticmethod
+    def _build_final_request(
+        original_question: str,
+        vision_findings: dict[str, list[str]] | None,
+    ) -> str:
+        if not vision_findings:
+            return original_question
+        return (
+            f"Original user question:\n{original_question}\n\n"
+            f"Structured visual findings from image analysis:\n"
+            f"{json.dumps(vision_findings, ensure_ascii=True)}\n\n"
+            "Use these findings as evidence, noting any listed uncertainty."
         )
 
     def _build_augmented_message(
