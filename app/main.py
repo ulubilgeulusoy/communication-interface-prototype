@@ -882,13 +882,22 @@ async def _run_llm_request(
         retrieved_sources_json=json.dumps(retrieved_chunks_payload),
     )
 
-    if rag_reply.used_retrieval and retrieved_chunks_payload and current_state.retrieval_mode != "disabled":
-        first_chunk = rag_reply.retrieved_chunks[0]
-        resolved_title = current_state.active_document_title or Path(first_chunk.filename).stem.replace("_", " ").replace("-", " ").strip()
+    if (
+        rag_reply.used_retrieval
+        and retrieved_chunks_payload
+        and current_state.retrieval_mode != "disabled"
+        and rag_reply.selected_document_id
+        and rag_reply.retrieval_reason in {"explicit_task_route", "confident_retrieval_match"}
+    ):
+        resolved_title = (
+            rag_reply.selected_document_title
+            or current_state.active_document_title
+            or Path(rag_reply.retrieved_chunks[0].filename).stem.replace("_", " ").replace("-", " ").strip()
+        )
         current_state = LLMContextState(
             retrieval_mode="document",
             active_document_title=resolved_title,
-            active_document_id=first_chunk.document_id,
+            active_document_id=rag_reply.selected_document_id,
         )
     elif current_state.retrieval_mode == "disabled":
         current_state = LLMContextState(

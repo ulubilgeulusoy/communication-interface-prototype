@@ -58,6 +58,9 @@ class RetrievedChunk:
     end_char: int
     similarity_distance: float | None
     collection_name: str
+    lexical_score: float = 0.0
+    title_score: float = 0.0
+    task_score: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,14 @@ class RetrievalDiagnostics:
     filtered_candidate_count: int
     returned_chunk_count: int
     max_similarity_distance: float | None
+    top_document_id: str = ""
+    top_filename: str = ""
+    top_similarity_distance: float | None = None
+    second_similarity_distance: float | None = None
+    top_lexical_score: float = 0.0
+    top_title_score: float = 0.0
+    top_task_score: float = 0.0
+    document_spread: int = 0
 
 
 @dataclass(frozen=True)
@@ -112,7 +123,7 @@ class ChromaRetrievalStore:
                 collection.upsert(
                     ids=[item.chunk.chunk_id for item in document_chunks],
                     embeddings=[item.vector for item in document_chunks],
-                    documents=[item.chunk.embedding_text for item in document_chunks],
+                    documents=[item.chunk.text for item in document_chunks],
                     metadatas=[self._metadata_for_chunk(item.chunk) for item in document_chunks],
                 )
             except Exception as exc:  # pragma: no cover - Chroma raises library-specific errors
@@ -173,6 +184,16 @@ class ChromaRetrievalStore:
             filtered_candidate_count=len(filtered_candidates),
             returned_chunk_count=len(ranked_candidates),
             max_similarity_distance=max_similarity_distance,
+            top_document_id=ranked_candidates[0].document_id if ranked_candidates else "",
+            top_filename=ranked_candidates[0].filename if ranked_candidates else "",
+            top_similarity_distance=ranked_candidates[0].similarity_distance if ranked_candidates else None,
+            second_similarity_distance=(
+                ranked_candidates[1].similarity_distance if len(ranked_candidates) > 1 else None
+            ),
+            top_lexical_score=ranked_candidates[0].lexical_score if ranked_candidates else 0.0,
+            top_title_score=ranked_candidates[0].title_score if ranked_candidates else 0.0,
+            top_task_score=ranked_candidates[0].task_score if ranked_candidates else 0.0,
+            document_spread=len({chunk.document_id for chunk in ranked_candidates}),
         )
         if not ranked_candidates or neighbor_window == 0:
             return RetrievalResult(chunks=ranked_candidates, diagnostics=diagnostics)
@@ -278,22 +299,40 @@ class ChromaRetrievalStore:
                 ),
             )
 
-        def ranking_key(chunk: RetrievedChunk) -> tuple[float, float, int]:
+        scored: list[RetrievedChunk] = []
+        for chunk in retrieved:
             lexical_score = _lexical_overlap_score(
                 query_tokens,
-                " ".join(
-                    [
-                        chunk.filename,
-                        chunk.category,
-                        chunk.text,
-                    ]
-                ),
+                " ".join([chunk.filename, chunk.category, chunk.text]),
             )
+            title_score = _title_overlap_score(query_tokens, chunk.filename, chunk.text)
+            task_score = _task_overlap_score(query_tokens, chunk.text)
+            scored.append(
+                RetrievedChunk(
+                    chunk_id=chunk.chunk_id,
+                    document_id=chunk.document_id,
+                    text=chunk.text,
+                    source_path=chunk.source_path,
+                    filename=chunk.filename,
+                    category=chunk.category,
+                    chunk_index=chunk.chunk_index,
+                    start_char=chunk.start_char,
+                    end_char=chunk.end_char,
+                    similarity_distance=chunk.similarity_distance,
+                    collection_name=chunk.collection_name,
+                    lexical_score=lexical_score,
+                    title_score=title_score,
+                    task_score=task_score,
+                )
+            )
+
+        def ranking_key(chunk: RetrievedChunk) -> tuple[float, float, float, float, int]:
+            combined_score = chunk.lexical_score + (chunk.title_score * 2.5) + (chunk.task_score * 2.0)
             distance = chunk.similarity_distance if chunk.similarity_distance is not None else float("inf")
             step_match = 1 if re.search(r"(?i)\bstep\s+\d+\b", chunk.text) else 0
-            return (-lexical_score, distance, -step_match)
+            return (-combined_score, -chunk.title_score, distance, -chunk.task_score, -step_match)
 
-        return sorted(retrieved, key=ranking_key)
+        return sorted(scored, key=ranking_key)
 
     def _fetch_neighbors(
         self,
@@ -446,3 +485,26 @@ def _lexical_overlap_score(query_tokens: set[str], text: str) -> float:
     if not chunk_tokens:
         return 0.0
     return len(query_tokens & chunk_tokens) / len(query_tokens)
+
+
+def _title_overlap_score(query_tokens: set[str], filename: str, text: str) -> float:
+    if not query_tokens:
+        return 0.0
+    title_tokens = _tokenize(Path(filename).stem.replace("_", " ").replace("-", " "))
+    header_tokens = _tokenize("\n".join(str(text).splitlines()[:3]))
+    combined = title_tokens | header_tokens
+    if not combined:
+        return 0.0
+    return len(query_tokens & combined) / len(query_tokens)
+
+
+def _task_overlap_score(query_tokens: set[str], text: str) -> float:
+    if not query_tokens:
+        return 0.0
+    lowered = str(text).lower()
+    matched = {
+        token
+        for token in query_tokens
+        if token in lowered and token not in {"the", "and", "for", "with", "this", "that", "what", "does"}
+    }
+    return len(matched) / len(query_tokens)

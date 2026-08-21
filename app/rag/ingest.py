@@ -58,6 +58,7 @@ class KnowledgeChunk:
     chunk_index: int
     start_char: int
     end_char: int
+    task_summary: str = ""
 
 
 @dataclass(frozen=True)
@@ -163,7 +164,15 @@ def _chunk_document(
     )
 
     chunks: list[KnowledgeChunk] = []
-    chunk_index = 0
+    task_summary = _extract_task_summary(document.text, document.filename)
+    summary_chunk = _build_summary_chunk(
+        document,
+        task_summary=task_summary,
+    )
+    if summary_chunk is not None:
+        chunks.append(summary_chunk)
+
+    chunk_index = len(chunks)
     for group in block_groups:
         raw_start = group[0].start_char
         raw_end = group[-1].end_char
@@ -191,6 +200,7 @@ def _chunk_document(
                     chunk_index=chunk_index,
                     start_char=start,
                     end_char=end,
+                    task_summary=task_summary,
                 )
             )
             chunk_index += 1
@@ -519,8 +529,10 @@ def _build_embedding_text(
     filename_stem = Path(document.filename).stem.replace("_", " ").replace("-", " ")
     step_match = re.search(r"(?im)^step\s+\d+.*$", chunk_text)
     step_label = step_match.group(0).strip() if step_match else ""
+    task_summary = _extract_task_summary(document.text, document.filename)
     return (
         f"Document title: {filename_stem}\n"
+        f"Task summary: {task_summary}\n"
         f"Document id: {document.document_id}\n"
         f"Source file: {document.filename}\n"
         f"Category: {document.category}\n"
@@ -536,3 +548,50 @@ def _build_document_id(base_path: Path, path: Path) -> str:
     relative_path = path.relative_to(base_path)
     stem = relative_path.with_suffix("")
     return "::".join(stem.parts).lower()
+
+
+def _extract_task_summary(text: str, filename: str) -> str:
+    lines = [line.strip() for line in str(text).splitlines() if line.strip()]
+    if lines:
+        title = lines[0]
+        lowered = title.lower()
+        if "guide id:" in lowered and len(lines) > 1:
+            return lines[1]
+        return title
+    return Path(filename).stem.replace("_", " ").replace("-", " ").strip()
+
+
+def _build_summary_chunk(
+    document: SourceDocument,
+    *,
+    task_summary: str,
+) -> KnowledgeChunk | None:
+    intro_excerpt = document.text[:700].strip()
+    if not intro_excerpt:
+        return None
+
+    summary_text = (
+        f"{task_summary}\n"
+        f"Document type: {document.category}\n"
+        f"Source file: {document.filename}\n"
+        "Summary:\n"
+        f"{intro_excerpt}"
+    ).strip()
+    return KnowledgeChunk(
+        chunk_id=f"{document.category}:{document.filename}:summary",
+        document_id=document.document_id,
+        text=summary_text,
+        embedding_text=_build_embedding_text(
+            document=document,
+            chunk_id=f"{document.category}:{document.filename}:summary",
+            chunk_index=0,
+            chunk_text=summary_text,
+        ),
+        source_path=document.source_path,
+        filename=document.filename,
+        category=document.category,
+        chunk_index=0,
+        start_char=0,
+        end_char=min(len(document.text), len(intro_excerpt)),
+        task_summary=task_summary,
+    )
